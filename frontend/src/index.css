@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* "Deep Science" Palette - Dark Mode Default */
+    --background: 224 71% 2%; /* Almost Pure Black/Blue #010409 */
+    --foreground: 210 40% 98%;
+
+    --card: 224 71% 4%; 
+    --card-foreground: 210 40% 98%;
+
+    --popover: 224 71% 4%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217 91% 60%; /* Electric Science Blue */
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 217 91% 60%;
+    
+    --radius: 0.75rem; /* More rounded, modern feel */
+  }
+
+  .dark {
+    /* Explicit dark mode mapping if needed, but root is already dark */
+    --background: 224 71% 2%;
+    --foreground: 210 40% 98%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased overflow-x-hidden;
+    font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1; /* Smart ligatures + alt style */
+  }
+
+  /* Cinematic Grain - The "Realism" Texture */
+  body::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 9999;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
+    opacity: 0.4;
+    mix-blend-mode: overlay;
+  }
+}
+
+@layer utilities {
+    .glass-card {
+        @apply bg-[#030712]/60 backdrop-blur-xl border border-white/5 shadow-2xl;
+    }
+    
+    .glass-panel {
+        @apply bg-[#030712]/80 backdrop-blur-2xl border-t border-white/10 shadow-[0_0_40px_-10px_rgba(0,0,0,0.5)];
+    }
+
+    .text-glow {
+        text-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+    }
+    
+    .text-balance {
+        text-wrap: balance;
+    }
+}

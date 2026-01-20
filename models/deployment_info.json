@@ -1,0 +1,43 @@
+{
+    "package_name": "Aadhaar Enrollment Prediction Models",
+    "version": "1.0.0",
+    "created_date": "2026-01-18 14:26:22",
+    "models": {
+        "random_forest": {
+            "file": "random_forest_model.pkl",
+            "test_r2": 0.9838798213781543,
+            "test_mae": 0.14292854503456306,
+            "test_rmse": 3.899614729302907
+        },
+        "xgboost": {
+            "file": "xgboost_model.pkl",
+            "test_r2": 0.9464109172959903,
+            "test_mae": 0.2565866298848695,
+            "test_rmse": 7.110087392475542
+        },
+        "lightgbm": {
+            "file": "lightgbm_model.pkl",
+            "test_r2": 0.979881759734165,
+            "test_mae": 0.26453655539265697,
+            "test_rmse": 4.356440355806167
+        }
+    },
+    "best_model": {
+        "name": "Random Forest",
+        "file": "best_model.pkl",
+        "test_r2": 0.9838798213781543,
+        "test_mae": 0.14292854503456306,
+        "test_rmse": 3.899614729302907
+    },
+    "preprocessing": {
+        "scaler": "scaler.pkl",
+        "label_encoder": "label_encoder.pkl",
+        "feature_metadata": "feature_metadata.json"
+    },
+    "usage_instructions": {
+        "1_load_model": "model = pickle.load(open('models/best_model.pkl', 'rb'))",
+        "2_load_scaler": "scaler = pickle.load(open('models/scaler.pkl', 'rb'))",
+        "3_prepare_features": "X_scaled = scaler.transform(X_new)",
+        "4_predict": "predictions = model.predict(X_scaled)"
+    }
+}
