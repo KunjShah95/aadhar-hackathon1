@@ -1,72 +1,201 @@
 {
-    "feature_columns": [
-        "demo_age_5_17",
-        "demo_age_17_",
-        "bio_age_5_17",
-        "bio_age_17_",
-        "day_of_week",
-        "day_of_month",
-        "month",
-        "quarter",
-        "year",
-        "is_weekend",
-        "days_since_start",
-        "enrol_rolling_mean_7d",
-        "enrol_rolling_std_7d",
-        "demo_update_rolling_mean_7d",
-        "bio_update_rolling_mean_7d",
-        "enrol_rolling_mean_14d",
-        "enrol_rolling_std_14d",
-        "demo_update_rolling_mean_14d",
-        "bio_update_rolling_mean_14d",
-        "enrol_rolling_mean_30d",
-        "enrol_rolling_std_30d",
-        "demo_update_rolling_mean_30d",
-        "bio_update_rolling_mean_30d",
-        "enrol_lag_1d",
-        "demo_update_lag_1d",
-        "bio_update_lag_1d",
-        "enrol_lag_7d",
-        "demo_update_lag_7d",
-        "bio_update_lag_7d",
-        "enrol_lag_14d",
-        "demo_update_lag_14d",
-        "bio_update_lag_14d",
-        "enrollment_to_demo_ratio",
-        "enrollment_to_bio_ratio",
-        "demo_to_bio_ratio",
-        "total_updates",
-        "engagement_score",
-        "age_0_5_pct",
-        "age_5_17_pct",
-        "age_18_pct",
-        "state_avg_enrol",
-        "state_std_enrol",
-        "state_min_enrol",
-        "state_max_enrol",
-        "state_avg_demo",
-        "state_avg_bio",
-        "enrol_vs_state_avg",
-        "demo_vs_state_avg",
-        "bio_vs_state_avg",
-        "enrol_volatility"
+  "model_name": "lightgbm",
+  "train_rows": 1527,
+  "test_rows": 493,
+  "total_rows": 2020,
+  "feature_columns": [
+    "day_of_week",
+    "month",
+    "quarter",
+    "day_of_month",
+    "is_weekend",
+    "is_holiday_month",
+    "sin_month",
+    "cos_month",
+    "sin_day_of_week",
+    "cos_day_of_week",
+    "lag_1d",
+    "lag_7d",
+    "lag_14d",
+    "lag_30d",
+    "rolling_mean_7d",
+    "rolling_mean_14d",
+    "rolling_mean_30d",
+    "rolling_std_7d",
+    "rolling_std_14d",
+    "rolling_std_30d",
+    "state_avg_enrol",
+    "state_rank",
+    "urban_rural_flag",
+    "enrol_to_demographic_ratio",
+    "biometric_engagement_score",
+    "enrol_growth_7d",
+    "enrol_volatility",
+    "total_demographic_updates",
+    "total_biometric_updates"
+  ],
+  "feature_count": 29,
+  "model_r2_score": 0.8038469596485082,
+  "training_date": "2026-04-06T02:05:54.955604+00:00",
+  "state_count": 42,
+  "date_min": "2025-09-20",
+  "date_max": "2025-12-31",
+  "best_params": {
+    "n_estimators": 300,
+    "max_depth": 8,
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_child_samples": 20,
+    "subsample": 0.9,
+    "colsample_bytree": 0.9
+  },
+  "feature_dtypes": {
+    "day_of_week": "int32",
+    "month": "int32",
+    "quarter": "int32",
+    "day_of_month": "int32",
+    "is_weekend": "int64",
+    "is_holiday_month": "int64",
+    "sin_month": "float64",
+    "cos_month": "float64",
+    "sin_day_of_week": "float64",
+    "cos_day_of_week": "float64",
+    "lag_1d": "float64",
+    "lag_7d": "float64",
+    "lag_14d": "float64",
+    "lag_30d": "float64",
+    "rolling_mean_7d": "float64",
+    "rolling_mean_14d": "float64",
+    "rolling_mean_30d": "float64",
+    "rolling_std_7d": "float64",
+    "rolling_std_14d": "float64",
+    "rolling_std_30d": "float64",
+    "state_avg_enrol": "float64",
+    "state_rank": "int64",
+    "urban_rural_flag": "int64",
+    "enrol_to_demographic_ratio": "float64",
+    "biometric_engagement_score": "float64",
+    "enrol_growth_7d": "float64",
+    "enrol_volatility": "float64",
+    "total_demographic_updates": "float64",
+    "total_biometric_updates": "float64"
+  },
+  "feature_ranges": {
+    "day_of_week": [
+      0.0,
+      6.0
     ],
-    "total_features": 50,
-    "model_name": "Random Forest",
-    "model_r2_score": 0.9838798213781543,
-    "model_mae": 0.14292854503456306,
-    "model_rmse": 3.899614729302907,
-    "training_date": "2026-01-18 14:26:22",
-    "exclude_columns": [
-        "date",
-        "state",
-        "district",
-        "pincode",
-        "total_enrolment",
-        "total_demographic_updates",
-        "total_biometric_updates",
-        "age_0_5",
-        "age_5_17",
-        "age_18_greater"
+    "month": [
+      9.0,
+      12.0
+    ],
+    "quarter": [
+      3.0,
+      4.0
+    ],
+    "day_of_month": [
+      1.0,
+      31.0
+    ],
+    "is_weekend": [
+      0.0,
+      1.0
+    ],
+    "is_holiday_month": [
+      0.0,
+      1.0
+    ],
+    "sin_month": [
+      -1.0,
+      -2.4492935982947064e-16
+    ],
+    "cos_month": [
+      -1.8369701987210297e-16,
+      1.0
+    ],
+    "sin_day_of_week": [
+      -0.9749279121818236,
+      0.9749279121818236
+    ],
+    "cos_day_of_week": [
+      -0.9009688679024191,
+      1.0
+    ],
+    "lag_1d": [
+      1.0,
+      22017.0
+    ],
+    "lag_7d": [
+      1.0,
+      22017.0
+    ],
+    "lag_14d": [
+      1.0,
+      22017.0
+    ],
+    "lag_30d": [
+      1.0,
+      157866.0
+    ],
+    "rolling_mean_7d": [
+      1.2857142857142858,
+      13253.142857142857
+    ],
+    "rolling_mean_14d": [
+      1.5,
+      10831.357142857143
+    ],
+    "rolling_mean_30d": [
+      1.6666666666666667,
+      18999.966666666667
+    ],
+    "rolling_std_7d": [
+      0.4879500364742645,
+      8301.108698182876
+    ],
+    "rolling_std_14d": [
+      0.6333236937766527,
+      6453.536611556752
+    ],
+    "rolling_std_30d": [
+      0.8441822541139559,
+      29996.934227354464
+    ],
+    "state_avg_enrol": [
+      2.1818181818181817,
+      11575.329545454546
+    ],
+    "state_rank": [
+      1.0,
+      45.0
+    ],
+    "urban_rural_flag": [
+      0.0,
+      1.0
+    ],
+    "enrol_to_demographic_ratio": [
+      0.0001312852829197847,
+      26655.0
+    ],
+    "biometric_engagement_score": [
+      0.0,
+      3389.0
+    ],
+    "enrol_growth_7d": [
+      -0.9991079393398751,
+      3302.0
+    ],
+    "enrol_volatility": [
+      0.8441822541139559,
+      29996.934227354464
+    ],
+    "total_demographic_updates": [
+      0.0,
+      160198.0
+    ],
+    "total_biometric_updates": [
+      0.0,
+      102803.0
     ]
+  }
 }

@@ -1,0 +1,60 @@
+{
+  "model_name": "lightgbm",
+  "training_date": "2026-04-06T02:05:54.955604+00:00",
+  "data_stats": {
+    "rows": 2020,
+    "states": 42,
+    "date_min": "2025-09-20",
+    "date_max": "2025-12-31"
+  },
+  "metrics": [
+    {
+      "Model": "default",
+      "r2": 0.8096841336891508,
+      "rmse": 1310.470640321291,
+      "mae": 357.63085621785507,
+      "mape": 70.52456789546426
+    },
+    {
+      "Model": "tuned",
+      "r2": 0.8096841336891508,
+      "rmse": 1310.470640321291,
+      "mae": 357.63085621785507,
+      "mape": 70.52456789546426
+    }
+  ],
+  "feature_list": [
+    "day_of_week",
+    "month",
+    "quarter",
+    "day_of_month",
+    "is_weekend",
+    "is_holiday_month",
+    "sin_month",
+    "cos_month",
+    "sin_day_of_week",
+    "cos_day_of_week",
+    "lag_1d",
+    "lag_7d",
+    "lag_14d",
+    "lag_30d",
+    "rolling_mean_7d",
+    "rolling_mean_14d",
+    "rolling_mean_30d",
+    "rolling_std_7d",
+    "rolling_std_14d",
+    "rolling_std_30d",
+    "state_avg_enrol",
+    "state_rank",
+    "urban_rural_flag",
+    "enrol_to_demographic_ratio",
+    "biometric_engagement_score",
+    "enrol_growth_7d",
+    "enrol_volatility",
+    "total_demographic_updates",
+    "total_biometric_updates"
+  ],
+  "feature_count": 29,
+  "anomaly_count": 82,
+  "forecast_rows": 90
+}
