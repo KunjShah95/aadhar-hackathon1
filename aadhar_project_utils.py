@@ -308,8 +308,27 @@ def prepare_model_frame(df: pd.DataFrame, feature_list: list[str] | None = None)
     for feature in feature_list:
         if feature not in frame.columns:
             frame[feature] = 0.0
-        frame[feature] = pd.to_numeric(frame[feature], errors="coerce").fillna(0.0)
+        frame[feature] = pd.to_numeric(frame[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return frame
+
+
+def _sanitize_feature_frame(
+    frame: pd.DataFrame,
+    feature_list: list[str],
+    feature_ranges: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    sanitized = frame.copy()
+    for feature in feature_list:
+        if feature not in sanitized.columns:
+            sanitized[feature] = 0.0
+        sanitized[feature] = pd.to_numeric(sanitized[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        if feature_ranges and feature in feature_ranges:
+            bounds = feature_ranges[feature]
+            if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+                low, high = bounds
+                if pd.notna(low) and pd.notna(high):
+                    sanitized[feature] = sanitized[feature].clip(lower=float(low), upper=float(high))
+    return sanitized
 
 
 def _load_model_file(path: Path) -> Any:
@@ -369,7 +388,7 @@ def load_best_bundle() -> dict[str, Any]:
 
 
 def _predict_frame(model: Any, frame: pd.DataFrame, feature_list: list[str]) -> np.ndarray:
-    X = frame[feature_list].to_numpy(dtype=float)
+    X = frame[feature_list]
     preds = model.predict(X)
     return np.asarray(preds, dtype=float)
 
@@ -381,6 +400,7 @@ def recursive_forecast_lightgbm(
     state: str,
     feature_list: list[str],
     scaler: Any | None = None,
+    feature_ranges: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     history = df[df["state"] == state].sort_values("date").copy()
     if history.empty:
@@ -461,8 +481,15 @@ def recursive_forecast_lightgbm(
             "total_demographic_updates": demographic_proxy,
             "total_biometric_updates": biometric_proxy,
         }
-        feature_frame = pd.DataFrame([feature_row])
-        forecast = float(model.predict(feature_frame[feature_list].to_numpy(dtype=float))[0])
+        feature_frame = _sanitize_feature_frame(pd.DataFrame([feature_row]), feature_list, feature_ranges)
+        forecast = float(model.predict(feature_frame[feature_list])[0])
+        if not np.isfinite(forecast):
+            forecast = float(lag_1d)
+        forecast = max(0.0, forecast)
+        if feature_ranges and "total_enrolments" in feature_ranges:
+            bounds = feature_ranges["total_enrolments"]
+            if isinstance(bounds, (list, tuple)) and len(bounds) == 2 and pd.notna(bounds[1]):
+                forecast = min(forecast, float(bounds[1]))
         forecast_rows.append({"date": next_date, "state": state, "forecast": forecast})
         rolling_history.append(forecast)
         demographic_history.append(demographic_proxy)

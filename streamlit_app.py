@@ -60,6 +60,7 @@ model_report = bundle.get("model_report", {})
 model_comparison = bundle.get("model_comparison", pd.DataFrame())
 metadata = bundle.get("feature_metadata", {})
 feature_list = metadata.get("feature_columns", feature_columns())
+feature_ranges = metadata.get("feature_ranges", {})
 available_models = bundle.get("available_models", {})
 best_model_name = bundle.get("best_model_name")
 
@@ -108,7 +109,7 @@ def get_feature_importance(model: object) -> pd.DataFrame:
 
 def attach_predictions(df: pd.DataFrame, model: object) -> pd.DataFrame:
     frame = prepare_model_frame(df, feature_list)
-    preds = model.predict(frame[feature_list].to_numpy(dtype=float))
+    preds = model.predict(frame[feature_list])
     out = df.copy()
     out["predicted_enrolments"] = np.asarray(preds, dtype=float)
     out["residual"] = out["total_enrolments"] - out["predicted_enrolments"]
@@ -145,7 +146,7 @@ def page_dashboard(df: pd.DataFrame, model_name: str, model: object) -> None:
         fig.add_trace(go.Scatter(x=daily["date"], y=daily["total_enrolments"], name="Actual", mode="lines+markers"))
         fig.add_trace(go.Scatter(x=daily["date"], y=daily["predicted_enrolments"], name="Predicted", mode="lines"))
         fig.update_layout(height=440, xaxis_title="Date", yaxis_title="Enrolments", title="Actual vs predicted enrolments")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     with right:
         top_states = (
             predicted.groupby("state", as_index=False)[["total_enrolments", "predicted_enrolments"]]
@@ -161,18 +162,18 @@ def page_dashboard(df: pd.DataFrame, model_name: str, model: object) -> None:
             title="States by predicted enrolment",
         )
         fig.update_layout(height=440, yaxis={"categoryorder": "total ascending"})
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     st.subheader("Residuals")
     residual_summary = daily.assign(residual=daily["total_enrolments"] - daily["predicted_enrolments"])
-    st.plotly_chart(px.bar(residual_summary, x="date", y="residual", title="Daily residuals"), use_container_width=True)
+    st.plotly_chart(px.bar(residual_summary, x="date", y="residual", title="Daily residuals"), width="stretch")
 
     st.subheader("Feature importance")
     importance = get_feature_importance(model)
     if importance.empty:
         st.info("This model does not expose feature importance or coefficients.")
     else:
-        st.plotly_chart(px.bar(importance.head(15), x="importance", y="feature", orientation="h", title="Top 15 features"), use_container_width=True)
+        st.plotly_chart(px.bar(importance.head(15), x="importance", y="feature", orientation="h", title="Top 15 features"), width="stretch")
 
     st.subheader("Age composition")
     age_summary = pd.DataFrame(
@@ -181,12 +182,12 @@ def page_dashboard(df: pd.DataFrame, model_name: str, model: object) -> None:
             "Count": [predicted["age_0_5"].sum(), predicted["age_5_17"].sum(), predicted["age_18_greater"].sum()],
         }
     )
-    st.plotly_chart(px.pie(age_summary, names="Age Group", values="Count", title="Enrolment age distribution"), use_container_width=True)
+    st.plotly_chart(px.pie(age_summary, names="Age Group", values="Count", title="Enrolment age distribution"), width="stretch")
 
     st.subheader("Anomalies")
     st.write(f"Flagged rows: {anomaly_count:,}")
     if not anomalies.empty:
-        st.dataframe(anomalies[["date", "state", "total_enrolments", "z_score", "severity"]].head(10), use_container_width=True)
+        st.dataframe(anomalies[["date", "state", "total_enrolments", "z_score", "severity"]].head(10), width="stretch")
 
 
 def page_trends(df: pd.DataFrame, model_name: str, model: object) -> None:
@@ -200,7 +201,7 @@ def page_trends(df: pd.DataFrame, model_name: str, model: object) -> None:
     fig.add_trace(go.Scatter(x=ts["date"], y=ts["total_demographic_updates"], name="Demographic updates", mode="lines"))
     fig.add_trace(go.Scatter(x=ts["date"], y=ts["total_biometric_updates"], name="Biometric updates", mode="lines"))
     fig.update_layout(height=520, xaxis_title="Date", yaxis_title="Count", title="Time-series overview")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     state_ts = predicted.groupby(["date", "state"], as_index=False)[["total_enrolments", "predicted_enrolments"]].sum()
     top_state = state_ts.groupby("state")["total_enrolments"].sum().sort_values(ascending=False).index[0]
@@ -209,7 +210,7 @@ def page_trends(df: pd.DataFrame, model_name: str, model: object) -> None:
     fig.add_trace(go.Scatter(x=state_line["date"], y=state_line["total_enrolments"], name="Actual"))
     fig.add_trace(go.Scatter(x=state_line["date"], y=state_line["predicted_enrolments"], name="Predicted"))
     fig.update_layout(height=420, title=f"Trend for {top_state}", xaxis_title="Date", yaxis_title="Enrolments")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def page_geography(df: pd.DataFrame, model_name: str, model: object) -> None:
@@ -228,10 +229,10 @@ def page_geography(df: pd.DataFrame, model_name: str, model: object) -> None:
         st.subheader("All states ranking")
         st.plotly_chart(
             px.bar(state_summary, x="predicted_enrolments", y="state", orientation="h", title="States by predicted enrolment"),
-            use_container_width=True,
+            width="stretch",
         )
         with st.expander("Full state table"):
-            st.dataframe(state_summary, use_container_width=True)
+            st.dataframe(state_summary, width="stretch")
 
     with drilldown_tab:
         st.subheader("Search and drill down")
@@ -257,7 +258,7 @@ def page_geography(df: pd.DataFrame, model_name: str, model: object) -> None:
             fig.add_trace(go.Scatter(x=history["date"], y=history["total_enrolments"], name="Actual"))
             fig.add_trace(go.Scatter(x=history["date"], y=history["predicted_enrolments"], name="Predicted"))
             fig.update_layout(height=360, title=f"Trend for {focused_state}", xaxis_title="Date", yaxis_title="Enrolments")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     with compare_tab:
         st.subheader("Compare two states")
@@ -268,9 +269,9 @@ def page_geography(df: pd.DataFrame, model_name: str, model: object) -> None:
         compare_frame = state_summary[state_summary["state"].isin([left_state, right_state])].copy()
         st.plotly_chart(
             px.bar(compare_frame, x="state", y="predicted_enrolments", color="state", title="Predicted enrolments comparison"),
-            use_container_width=True,
+            width="stretch",
         )
-        st.dataframe(compare_frame, use_container_width=True)
+        st.dataframe(compare_frame, width="stretch")
 
 
 def page_anomalies(df: pd.DataFrame, model_name: str, model: object) -> None:
@@ -282,7 +283,7 @@ def page_anomalies(df: pd.DataFrame, model_name: str, model: object) -> None:
     if selected_states:
         view = view[view["state"].isin(selected_states)]
     view = view.sort_values("abs_error", ascending=False)
-    st.dataframe(view[["date", "state", "total_enrolments", "predicted_enrolments", "residual", "abs_error"]].head(25), use_container_width=True)
+    st.dataframe(view[["date", "state", "total_enrolments", "predicted_enrolments", "residual", "abs_error"]].head(25), width="stretch")
 
     if not view.empty:
         selected_state = st.selectbox("State for context chart", sorted(view["state"].dropna().unique().tolist()))
@@ -291,7 +292,7 @@ def page_anomalies(df: pd.DataFrame, model_name: str, model: object) -> None:
         fig.add_trace(go.Scatter(x=history["date"], y=history["total_enrolments"], name="Actual"))
         fig.add_trace(go.Scatter(x=history["date"], y=history["predicted_enrolments"], name="Predicted"))
         fig.update_layout(height=420, title=f"Model context — {selected_state}", xaxis_title="Date", yaxis_title="Enrolments")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 def page_forecast(df: pd.DataFrame, model_name: str, model: object) -> None:
@@ -299,14 +300,14 @@ def page_forecast(df: pd.DataFrame, model_name: str, model: object) -> None:
     states = sorted(df["state"].dropna().unique().tolist())
     state = st.selectbox("State", states)
     horizon = st.select_slider("Forecast horizon", options=[30, 60, 90], value=90)
-    forecast_df = recursive_forecast_lightgbm(model, df, horizon, state, feature_list, None)
+    forecast_df = recursive_forecast_lightgbm(model, df, horizon, state, feature_list, None, feature_ranges)
     history = df[df["state"] == state].sort_values("date").tail(180)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=history["date"], y=history["total_enrolments"], name="History"))
     fig.add_trace(go.Scatter(x=forecast_df["date"], y=forecast_df["forecast"], name=f"{model_name} forecast"))
     fig.update_layout(height=520, xaxis_title="Date", yaxis_title="Enrolments")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.download_button(
         "Download forecast CSV",
         forecast_df.to_csv(index=False).encode("utf-8"),
@@ -321,13 +322,13 @@ def page_model_report(model_name: str, model: object) -> None:
     if metrics.empty:
         st.info("No comparison metrics were found in `models/model_comparison.json`.")
     else:
-        st.dataframe(metrics, use_container_width=True)
+        st.dataframe(metrics, width="stretch")
         metric_col = "Test R2" if "Test R2" in metrics.columns else ("r2" if "r2" in metrics.columns else metrics.columns[1])
-        st.plotly_chart(px.bar(metrics, x="Model", y=metric_col, title="Model comparison"), use_container_width=True)
+        st.plotly_chart(px.bar(metrics, x="Model", y=metric_col, title="Model comparison"), width="stretch")
 
     importance = get_feature_importance(model)
     if not importance.empty:
-        st.plotly_chart(px.bar(importance.head(15), x="importance", y="feature", orientation="h", title=f"Top features for {model_name}"), use_container_width=True)
+        st.plotly_chart(px.bar(importance.head(15), x="importance", y="feature", orientation="h", title=f"Top features for {model_name}"), width="stretch")
 
     if st.button("Generate EDA exports"):
         paths = generate_eda_artifacts(panel)
