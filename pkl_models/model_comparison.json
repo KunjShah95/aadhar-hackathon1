@@ -2,11 +2,11 @@
   {
     "model": "LSTM (PyTorch)",
     "train_r2": null,
-    "test_r2": 0.1088,
+    "test_r2": 0.1618,
     "train_rmse": null,
-    "test_rmse": 1696.59,
+    "test_rmse": 1645.4,
     "train_mae": null,
-    "test_mae": 586.59,
+    "test_mae": 639.53,
     "test_mape": null,
     "training_seconds": null,
     "model_path": "lstm_model.pt"

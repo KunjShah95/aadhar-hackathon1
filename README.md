@@ -59,7 +59,7 @@ Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge 
 | Model | Test R² | Test RMSE | Test MAE | File |
 |---|---|---|---|---|
 | **Ridge Baseline** ⭐ | **0.3944** | 1422 | 619 | `ridge_baseline_model.pkl` |
-| LSTM (PyTorch) | 0.1088 | 1697 | 587 | `lstm_model.pt` |
+| LSTM (PyTorch) | 0.1618 | 1645 | 640 | `lstm_model.pt` |
 | LightGBM | −0.6413 | 2341 | 1195 | `lightgbm_model.pkl` |
 | Random Forest | −0.8961 | 2517 | 1092 | `random_forest_model.pkl` |
 | XGBoost | −0.9126 | 2528 | 1269 | `xgboost_model.pkl` |
