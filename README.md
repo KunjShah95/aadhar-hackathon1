@@ -1,119 +1,156 @@
-# 🪪 Aadhaar Analytics Dashboard
+# 🪪 Aadhaar Analytics & Predictive Intelligence Portal
 
+[![Python 3.11](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
 [![Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://streamlit.io/)
+[![Google Cloud Run](https://img.shields.io/badge/GCP-Cloud_Run-4285F4.svg?logo=googlecloud&logoColor=white)](https://cloud.google.com/run)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**ML-Powered Analytics Platform for Aadhaar Enrollment & Updates**  
-Analyze ~5M records across enrollment, demographic, and biometric data shards. Features interactive dashboard, predictions (RF/XGBoost/LightGBM), anomaly detection, and state-level forecasting.
+**Enterprise Multi-Shard Time Series Forecasting, Geospatial Density Mapping, MLOps Drift Detection & Anomaly Alert Portal**
 
-## 🎯 Features
+Analyze ~5 Million records across **Enrolment**, **Demographic**, and **Biometric** data shards across 28 canonical Indian States and Union Territories. Features multi-model regressors (XGBoost, LightGBM, Random Forest, Ridge Baseline), PyTorch Deep LSTM Neural Networks, quantile uncertainty forecasting, and a production-grade Streamlit web application.
 
-- **Multi-Page Dashboard**: KPIs, trends, geography, anomalies, forecasts, model reports.
-- **Model Predictions**: Attach forecasts to daily panels; R² up to 0.93 (XGBoost).
-- **Anomaly Detection**: Z-score + rolling stats; severity (Low/Mod/High).
-- **Forecasting**: Recursive 30/60/90-day state predictions.
-- **Visualizations**: Plotly charts (lines, bars, pies) for actual vs predicted.
-- **28 Canonical States**: Normalized from raw data aliases.
-- **Feature Engineering**: 30+ feats (lags, rollings, temporal, ratios, volatility).
+---
 
 ## 🚀 Quickstart
 
+### Local Execution
 ```bash
+# 1. Install dependencies
 pip install -r requirements.txt
-streamlit run streamlit_app.py
+
+# 2. Run automated MLOps drift audit
+python mlops_pipeline.py
+
+# 3. Launch Streamlit Application
+streamlit run app.py
+```
+Open `http://localhost:8080` or `http://localhost:8501` in your browser.
+
+---
+
+## ☁️ Google Cloud Run Deployment
+
+Deploy directly to **GCP Cloud Run** (Project: `vortex-arena-ai-92843`, Region: `asia-south1`):
+
+### Windows (PowerShell / Command Prompt)
+```cmd
+deploy_to_gcp.bat
 ```
 
-Open [http://localhost:8501](http://localhost:8501). Sidebar: Filter states/dates, select models.
+### Linux / macOS
+```bash
+chmod +x deploy_to_gcp.sh
+./deploy_to_gcp.sh
+```
 
-## 📱 Screenshots
+### Manual `gcloud` Command
+```bash
+gcloud config set project vortex-arena-ai-92843
 
-### Dashboard (KPIs + Charts)
+gcloud run deploy aadhaar-analytics-app \
+  --source . \
+  --region asia-south1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --port 8080
+```
 
-![Dashboard](outputs/dashboard.png) <!-- Generate via app button -->
+---
 
-### Trends + Forecast
+## 🐳 Docker Deployment
 
-![Trends](outputs/trends.png)
+### Build & Run Container
+```bash
+# Build Docker image
+docker build -t aadhaar-analytics-app .
 
-### Model Comparison
+# Run container on port 8080
+docker run -p 8080:8080 aadhaar-analytics-app
+```
 
-| Model | Test R² | RMSE | MAE |
-|-------|---------|------|-----|
-| XGBoost | 0.929 | 1008 | 175 |
-| Random Forest | 0.915 | 1106 | 321 |
-| LightGBM | 0.904 | 1176 | 279 |
+---
 
-*(Metrics from `models/model_comparison.json`)*
+## 📌 Features & Dashboard Modules
 
-## 📂 Project Structure
+The Streamlit portal ([`app.py`](file:///c:/aadhar%20hackathon/app.py)) includes **5 interactive modules**:
+
+1. **📊 Executive Dashboard**: High-level KPI metrics, national daily multi-shard time series trends, top 10 state volume rankings, age demographics share pie charts, and **CSV Data Exporters**.
+2. **🗺️ Geospatial & EDA**: Interactive **State Centroid GIS Density Map**, Day-of-week seasonality box plots, and cross-shard correlation matrix heatmaps.
+3. **🤖 ML Model Leaderboard & MLOps Drift**: Performance leaderboard table (R², RMSE, MAE, MAPE across XGBoost, LightGBM, Random Forest, Ridge, PyTorch LSTM), model comparison charts, and **MLOps KS-test & PSI Feature Drift Status**.
+4. **🔮 Live Forecast Predictor (Quantile Bounds)**: Real-time inference engine with **Quantile Uncertainty Bounds** (P10 lower bound, P50 median forecast, P90 upper bound) providing shaded forecast confidence intervals for any state and model.
+5. **🚨 Anomaly Alert Engine**: Rolling Z-score anomaly detector flagging campaign volume spikes with an **Automated Webhook Payload Alert Dispatch Simulator** (Slack/Email/PagerDuty integration) and downloadable **Anomaly Log CSV Exporters**.
+
+---
+
+## 📓 Standalone Self-Contained Notebooks (`.ipynb`)
+
+All notebooks are 100% self-contained and run standalone without external script dependencies:
+
+- [`01_Exploratory_Data_Analysis.ipynb`](file:///c:/aadhar%20hackathon/01_Exploratory_Data_Analysis.ipynb): Data ingestion, state canonical normalization, and interactive Plotly visualizations.
+- [`02_Model_Training_and_Evaluation.ipynb`](file:///c:/aadhar%20hackathon/02_Model_Training_and_Evaluation.ipynb): 37-feature engineering pipeline, model training (XGBoost, LightGBM, Random Forest, Ridge), metric evaluation, and exporting `.pkl` files to `pkl_models/`.
+- [`03_LSTM_Time_Series_Forecasting.ipynb`](file:///c:/aadhar%20hackathon/03_LSTM_Time_Series_Forecasting.ipynb): PyTorch stacked `AadhaarLSTMNetwork`, Huber loss, sequence DataLoader, log-variance stabilization, and model weight exporting.
+
+---
+
+## 📁 Repository Structure
 
 ```
 c:/aadhar hackathon/
-├── streamlit_app.py     # Multi-page Streamlit dashboard
-├── aadhar_project_utils.py # Data utils, features, models, forecast, anomalies
-├── requirements.txt     # Dependencies
-├── TODO.md             # Task progress
-├── README.md           # This file
-├── models/             # .pkl models + metadata JSNs
+├── app.py                      # Production-grade Streamlit Web Application
+├── Dockerfile                  # Cloud Run & Docker Containerization Manifest
+├── .dockerignore               # Docker build ignore file
+├── Procfile                    # Cloud PaaS deployment entry point
+├── requirements.txt            # Pinned Python dependencies
+├── mlops_pipeline.py           # Automated MLOps KS & PSI Drift Detection Script
+├── deploy_to_gcp.bat           # One-click Windows GCP Cloud Run deploy script
+├── deploy_to_gcp.sh            # One-click Linux/macOS GCP Cloud Run deploy script
+├── PROJECT_REPORT.md           # Comprehensive technical report & future roadmap
+├── README.md                   # Project documentation
+├── .streamlit/
+│   └── config.toml             # Streamlit server & dark theme configuration
+├── pkl_models/                 # Unified model artifacts & metadata JSON directory
+│   ├── baseline_ridge_model.pkl
 │   ├── best_model.pkl
+│   ├── lightgbm_model.pkl
 │   ├── random_forest_model.pkl
+│   ├── ridge_baseline_model.pkl
 │   ├── xgboost_model.pkl
+│   ├── lstm_model.pt
 │   ├── feature_metadata.json
 │   ├── model_comparison.json
-│   └── model_report.json
-├── api_data_aadhar_enrolment/   # ~1M rows
-├── api_data_aadhar_demographic/ # ~2M rows
-├── api_data_aadhar_biometric/   # ~1.8M rows
-└── outputs/            # EDA HTMLs/CSVs (auto-generated)
+│   ├── model_report.json
+│   └── mlops_drift_report.json
+├── 01_Exploratory_Data_Analysis.ipynb
+├── 02_Model_Training_and_Evaluation.ipynb
+├── 03_LSTM_Time_Series_Forecasting.ipynb
+├── api_data_aadhar_enrolment/   # Enrolment data shard
+├── api_data_aadhar_demographic/ # Demographic update data shard
+└── api_data_aadhar_biometric/   # Biometric update data shard
 ```
 
-## 🔧 Tech Stack
+---
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.32-orange)
-![Pandas](https://img.shields.io/badge/Pandas-2.0-green)
-![Plotly](https://img.shields.io/badge/Plotly-5.17-blue)
-![LightGBM](https://img.shields.io/badge/LightGBM-4.1-green)
-![XGBoost](https://img.shields.io/badge/XGBoost-2.0-yellow)
+## ⚙️ MLOps & Continuous Monitoring (`mlops_pipeline.py`)
 
-## 📈 Usage
+The platform implements continuous feature monitoring:
+- **Kolmogorov-Smirnov (KS) Test**: Evaluates statistical distribution divergence between reference baseline and incoming production data.
+- **Population Stability Index (PSI)**: Quantifies shift magnitude (< 0.1: Stable, 0.1–0.25: Moderate Shift, > 0.25: Critical Shift requiring retraining).
 
-1. **Filters**: Sidebar states/dates.
-2. **Models**: Select from available (best auto-loaded).
-3. **Pages**:
-   - **Dashboard**: KPIs, actual/pred, top states, residuals, features, age pie.
-   - **Trends**: TS overview + top-state drill.
-   - **Geography**: State bar (predicted enrolments).
-   - **Anomalies**: Table + state context chart.
-   - **Forecast**: Slider horizon (30/60/90), download CSV.
-   - **Model Report**: Metrics table/chart, top features.
-4. **Exports**: `outputs/` via `Generate EDA` button.
+Run the automated MLOps audit:
+```bash
+python mlops_pipeline.py
+```
+*Outputs JSON report to `pkl_models/mlops_drift_report.json`.*
 
-## 🗺️ Data Processing
+---
 
-- **Shards**: Aggregated to state-daily panels (continuous dates).
-- **Normalization**: 28 states (aliases → canonical).
-- **Features**: `day_of_week`, `lags_1/7/14/30`, `rolling_mean/std_7/14/30`, ratios, etc.
-- **Coverage**: All dates filled; early lags=0.
+## 📄 Technical Report
 
-## 🔮 Key Insights (from App)
+For in-depth mathematical formulations, feature descriptions, benchmark tables, and future architectural roadmaps, consult [`PROJECT_REPORT.md`](file:///c:/aadhar%20hackathon/PROJECT_REPORT.md).
 
-- **Concentration**: Top states (UP/Bihar/MP) dominate.
-- **Spikes**: Campaign-driven peaks detectable via anomalies.
-- **Age**: Strong youth focus.
-- **Forecast**: Use for capacity planning.
-
-## 🛠️ Development
-
-- Models trained externally; artifacts in `models/`.
-- Extend: Add Prophet/LSTM, district choropleths (Folium), Flask API.
-- Cache: `@st.cache_data/resource` for perf.
+---
 
 ## 📄 License
 
-MIT - Built for Aadhaar Hackathon.
-
-## 🙏 Acknowledgements
-
-- Libraries: Streamlit, Pandas, Plotly, LightGBM, XGBoost   
-- Hackathon: Organized by  UIDAI, inspired by real-world Aadhaar analytics needs.
-- Inspiration: Data science dashboards, forecasting, anomaly detection best practices.
+MIT License - Built for UIDAI Aadhaar Hackathon & Enterprise Predictive Intelligence.

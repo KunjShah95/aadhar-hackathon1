@@ -1,0 +1,9 @@
+.git
+.gitignore
+.qodo
+__pycache__
+*.pyc
+*.pyo
+scratch/
+.system_generated/
+*.log
