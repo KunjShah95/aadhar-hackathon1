@@ -1,11 +1,15 @@
 # Aadhaar Analytics Dashboard
 
 **ML-powered analytics platform for Aadhaar enrollment & update trends across India.**  
-Analyzes ~5M records spanning enrollment, demographic, and biometric data — with interactive dashboards, multi-model predictions, anomaly detection, and state-level forecasting.
+Analyzes ~5M records spanning enrollment, demographic, and biometric data — with interactive dashboards, multi-model predictions, quantile forecasting, anomaly detection, and MLOps drift monitoring.
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square)](https://python.org)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.32-FF4B4B?style=flat-square)](https://streamlit.io)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue?style=flat-square)](https://python.org)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B?style=flat-square)](https://streamlit.io)
 [![LightGBM](https://img.shields.io/badge/LightGBM-4.0-9ACD32?style=flat-square)](https://lightgbm.readthedocs.io)
+[![XGBoost](https://img.shields.io/badge/XGBoost-1.7-orange?style=flat-square)](https://xgboost.readthedocs.io)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0-EE4C2C?style=flat-square)](https://pytorch.org)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square)](https://docker.com)
+[![GCP Cloud Run](https://img.shields.io/badge/GCP-Cloud%20Run-4285F4?style=flat-square)](https://cloud.google.com/run)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
 ---
@@ -18,42 +22,51 @@ Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge 
 
 ---
 
-## Features
+## Application Modules (5 Tabs)
 
-**Dashboard (6 pages)**
-- KPIs, actual vs. predicted enrollment, residuals, feature importance, age distribution
-- Time-series trends with per-state drill-down
-- Geography view: state-level predicted enrollment bar charts
-- Anomaly table with context charts
-- Forecast slider (30 / 60 / 90 days) with CSV export
-- Model report: metrics comparison and top features
+### 1. Executive Dashboard
+- KPI cards: total enrollments, unique states, daily average, data span
+- Daily enrollment time-series with rolling 30-day average
+- Top 10 states by enrollment (horizontal bar chart)
+- Age group demographics pie chart
+- CSV export of filtered data
 
-**Machine Learning**
-- Three trained models: Random Forest, XGBoost, LightGBM
-- 60+ engineered features (lags, rolling stats, temporal indicators, volatility, ratios)
-- Best model auto-loaded at startup
+### 2. Geospatial & EDA
+- India state-level GIS density map (Plotly `scatter_geo`)
+- Day-of-week seasonality box plots
+- Cross-shard feature correlation heatmap
 
-**Anomaly Detection**
-- Z-score + rolling statistics baseline
-- Residual-based multi-model consensus
-- Severity classification: Low / Medium / High
+### 3. ML Model Leaderboard & MLOps Drift
+- Model benchmark leaderboard table (R², RMSE, MAE)
+- Test R² comparison bar chart across all 5 trained models
+- Kolmogorov-Smirnov (KS) test + Population Stability Index (PSI) feature drift monitoring
+- CSV leaderboard exporter
 
-**Forecasting**
-- Recursive 30/60/90-day state-level predictions
-- 95% confidence intervals
-- Exportable forecast CSV
+### 4. Live Forecast Predictor with Quantile Bounds
+- Real-time inference engine for 1–30 day forecasting horizon
+- P10 lower bound, P50 median prediction, P90 upper bound with shaded confidence intervals
+- Configurable state and feature inputs
+
+### 5. Anomaly Alert Engine
+- Z-score spike detector across enrollment time-series
+- Interactive webhook alert payload simulator (Slack / Email)
+- CSV anomaly log exporter
 
 ---
 
-## Model Performance
+## Machine Learning Models
 
-| Model | R² | RMSE | MAE | Training Time |
+| Model | R² | RMSE | MAE | File |
 |---|---|---|---|---|
-| **LightGBM** ⭐ | **0.8276** | 721 | 542 | ~28s |
-| XGBoost | 0.8123 | 757 | 578 | ~32s |
-| Random Forest | 0.7845 | 892 | 645 | ~45s |
+| **LightGBM** ⭐ | **0.8276** | 721 | 542 | `lightgbm_model.pkl` |
+| XGBoost | 0.8123 | 757 | 578 | `xgboost_model.pkl` |
+| Random Forest | 0.7845 | 892 | 645 | `random_forest_model.pkl` |
+| Ridge Baseline | — | — | — | `ridge_baseline_model.pkl` |
+| LSTM (PyTorch) | — | — | — | `lstm_model.pt` |
 
 **Top predictive features** (LightGBM): `enrol_rolling_mean_30d`, `days_since_start`, `enrol_lag_7d`, `state_avg_enrol`, `month`
+
+All model artifacts are pre-trained and committed to the `pkl_models/` directory, so the app loads instantly without re-training.
 
 ---
 
@@ -64,48 +77,16 @@ Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge 
 git clone https://github.com/KunjShah95/aadhar-hackathon1.git
 cd aadhar-hackathon1
 pip install -r requirements.txt
-
-# Generate models first (run notebook or use pre-trained .pkl files in models/)
-streamlit run streamlit_app.py
+streamlit run app.py
 ```
-Open `http://localhost:8080` or `http://localhost:8501` in your browser.
+Open [http://localhost:8501](http://localhost:8501) in your browser.
 
-Open [http://localhost:8501](http://localhost:8501). Use the sidebar to filter by state, date range, and model.
-
-**To start the Flask prediction API:**
-
+### Docker
 ```bash
-python backend_api.py
-# API available at http://localhost:5000
+docker build -t aadhaar-analytics .
+docker run -p 8080:8080 aadhaar-analytics
 ```
-
----
-
-## API Reference
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/` | GET | Health check + model info |
-| `/predict` | POST | Single enrollment prediction |
-| `/predict_batch` | POST | Batch predictions |
-| `/model_info` | GET | Full model metadata |
-
-**Example:**
-
-```bash
-curl -X POST http://localhost:5000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"day_of_week": 3, "month": 6, "enrol_rolling_mean_7d": 1000, ...}'
-```
-
-```json
-{
-  "success": true,
-  "prediction": 1247.5,
-  "model_used": "LightGBM",
-  "confidence_score": 0.8276
-}
-```
+Open [http://localhost:8080](http://localhost:8080) in your browser.
 
 ---
 
@@ -113,31 +94,109 @@ curl -X POST http://localhost:5000/predict \
 
 ```
 aadhar-hackathon1/
-├── streamlit_app.py                 # Multi-page Streamlit dashboard
-├── aadhar_project_utils.py          # Data loading, feature engineering, models
-├── backend_api.py                   # Flask REST API
-├── frontend_integration.js          # React/Next.js integration helpers
-├── aadhar_trends_analysis.ipynb     # Full analysis notebook (2800+ lines)
-├── requirements.txt
 │
-├── models/
-│   ├── best_model.pkl               # LightGBM (auto-loaded)
+├── app.py                               # Streamlit app (5-tab dashboard)
+│
+├── 01_Exploratory_Data_Analysis.ipynb   # Self-contained EDA notebook
+├── 02_Model_Training_and_Evaluation.ipynb # Self-contained model training notebook
+├── 03_LSTM_Time_Series_Forecasting.ipynb  # Self-contained LSTM PyTorch notebook
+│
+├── mlops_pipeline.py                    # Automated KS + PSI drift monitoring script
+│
+├── pkl_models/                          # All pre-trained model artifacts (Git-tracked)
+│   ├── best_model.pkl                   # LightGBM best model (auto-loaded)
+│   ├── lightgbm_model.pkl
+│   ├── xgboost_model.pkl
 │   ├── random_forest_model.pkl
 │   ├── ridge_baseline_model.pkl
-│   ├── xgboost_model.pkl
-│   ├── lightgbm_model.pkl
-│   ├── scaler.pkl
-│   ├── label_encoder.pkl
-│   ├── feature_metadata.json
-│   ├── model_comparison.json
-│   └── deployment_info.json
+│   ├── baseline_ridge_model.pkl
+│   ├── lstm_model.pt                    # PyTorch LSTM weights
+│   ├── feature_metadata.json            # Feature names & engineering config
+│   ├── model_comparison.json            # Benchmark metrics
+│   ├── model_report.json                # Detailed model report
+│   └── mlops_drift_report.json          # KS + PSI drift audit results
 │
-├── api_data_aadhar_enrolment/       # ~1M rows
-├── api_data_aadhar_demographic/     # ~2M rows
-├── api_data_aadhar_biometric/       # ~1.8M rows
+├── api_data_aadhar_enrolment/           # Enrollment CSVs (~1M rows) [git-ignored]
+├── api_data_aadhar_demographic/         # Demographic CSVs (~2M rows) [git-ignored]
+├── api_data_aadhar_biometric/           # Biometric CSVs (~1.8M rows) [git-ignored]
 │
-└── outputs/                         # Auto-generated EDA exports (HTML/CSV)
+├── Dockerfile                           # Production container (PORT 8080)
+├── .dockerignore
+├── .streamlit/config.toml               # Streamlit headless server config
+├── requirements.txt                     # Pinned Python dependencies
+│
+├── deploy_to_gcp.bat                    # One-click GCP Cloud Run deploy (Windows)
+├── deploy_to_gcp.sh                     # One-click GCP Cloud Run deploy (Linux/macOS)
+│
+├── PROJECT_REPORT.md                    # Technical deep-dive & future roadmap
+├── .gitignore                           # Ignores raw CSVs only; .pkl files are tracked
+└── README.md
 ```
+
+---
+
+## Cloud Deployment
+
+### Google Cloud Run
+
+**Prerequisites**: Enable billing at [console.cloud.google.com/billing](https://console.cloud.google.com/billing) (offers **$300 free credits**).
+
+**Option A — One-Click Script (Windows):**
+```cmd
+deploy_to_gcp.bat
+```
+
+**Option B — Manual gcloud command:**
+```bash
+gcloud run deploy aadhaar-analytics-app \
+  --source . \
+  --region asia-south1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --port 8080
+```
+
+**Always Free Cloud Run Tier** (after free trial):
+- 2 Million Requests / month
+- 360,000 GB-seconds memory / month
+- 180,000 vCPU-seconds / month
+
+### Other Free Cloud Options
+
+| Platform | Free Tier | Notes |
+|---|---|---|
+| **Streamlit Community Cloud** | 1 GB RAM, unlimited apps | Easiest — 1-click GitHub deploy |
+| **Hugging Face Spaces** | **16 GB RAM CPU** | Best for PyTorch LSTM models |
+| **Oracle Cloud (OCI)** | 4 vCPUs + 24 GB RAM forever | Most generous always-free tier |
+| **Render** | 512 MB, sleeps on inactivity | Uses existing Dockerfile |
+
+---
+
+## MLOps — Drift Monitoring
+
+Run the automated drift audit script after collecting new inference data:
+
+```bash
+python mlops_pipeline.py
+```
+
+This calculates:
+- **Kolmogorov-Smirnov (KS) Test** — detects distribution shift per feature
+- **Population Stability Index (PSI)** — flags features with PSI > 0.2 for retraining alerts
+
+Results are saved to `pkl_models/mlops_drift_report.json` and visualized in the **ML Leaderboard & MLOps Drift** tab of the Streamlit app.
+
+---
+
+## Notebooks
+
+All notebooks are **100% self-contained** — no external `.py` modules required.
+
+| Notebook | Description |
+|---|---|
+| [`01_Exploratory_Data_Analysis.ipynb`](01_Exploratory_Data_Analysis.ipynb) | Data loading, state normalization, EDA visualizations |
+| [`02_Model_Training_and_Evaluation.ipynb`](02_Model_Training_and_Evaluation.ipynb) | Feature engineering, Ridge/RF/XGBoost/LightGBM training, exports to `pkl_models/` |
+| [`03_LSTM_Time_Series_Forecasting.ipynb`](03_LSTM_Time_Series_Forecasting.ipynb) | PyTorch LSTM training for time-series forecasting, exports `lstm_model.pt` |
 
 ---
 
@@ -153,31 +212,14 @@ aadhar-hackathon1/
 
 ## Tech Stack
 
-- **Data & ML:** Python 3.8+, Pandas, NumPy, Scikit-learn, XGBoost, LightGBM
-- **Dashboard:** Streamlit, Plotly
-- **API:** Flask, Flask-CORS
-- **Frontend:** TypeScript/React (integration layer)
-
----
-
-## Deployment
-
-**Docker:**
-
-```bash
-docker build -t aadhar-api .
-docker run -p 5000:5000 aadhar-api
-```
-
-**Cloud (examples):**
-
-```bash
-# AWS Elastic Beanstalk
-eb init && eb create aadhar-production && eb deploy
-
-# Google Cloud Run
-gcloud run deploy aadhar-api --source .
-```
+| Layer | Technology |
+|---|---|
+| **Data & ML** | Python 3.11, Pandas, NumPy, Scikit-learn, XGBoost, LightGBM |
+| **Deep Learning** | PyTorch 2.0 (LSTM Time-Series) |
+| **Dashboard** | Streamlit 1.28+, Plotly |
+| **MLOps** | KS-test, PSI drift monitoring (`mlops_pipeline.py`) |
+| **Containerization** | Docker (Python 3.11-slim, PORT 8080) |
+| **Cloud** | GCP Cloud Run (`asia-south1`) |
 
 ---
 
@@ -185,10 +227,10 @@ gcloud run deploy aadhar-api --source .
 
 | Error | Cause | Fix |
 |---|---|---|
-| `FileNotFoundError: best_model.pkl` | Models not generated | Run the notebook first |
-| `ValueError: X has N features, expecting M` | Feature mismatch | Check `feature_metadata.json` |
-| `MemoryError` | Dataset too large for RAM | Process in batches; close other apps |
-| CORS error from frontend | API URL mismatch | Verify `localhost:5000` in frontend config |
+| `FileNotFoundError: best_model.pkl` | `pkl_models/` not cloned | Pull latest Git (`pkl_models/` is now tracked) |
+| `ValueError: X has N features, expecting M` | Feature mismatch | Check `pkl_models/feature_metadata.json` |
+| `MemoryError` | Dataset too large | Process CSVs in batches; close other apps |
+| GCP billing error | Billing not enabled | Enable at [console.developers.google.com/billing](https://console.developers.google.com/billing/enable?project=vortex-arena-ai-92843) |
 
 ---
 
@@ -201,4 +243,4 @@ MIT — built for the UIDAI Aadhaar Hackathon.
 ## Acknowledgements
 
 - **UIDAI** for dataset availability and problem framing
-- Scikit-learn, XGBoost, LightGBM, Streamlit, and Flask open-source communities
+- Scikit-learn, XGBoost, LightGBM, PyTorch, Streamlit, and Plotly open-source communities
