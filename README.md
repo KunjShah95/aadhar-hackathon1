@@ -59,6 +59,7 @@ Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge 
 
 ## Quickstart
 
+### Local Execution
 ```bash
 git clone https://github.com/KunjShah95/aadhar-hackathon1.git
 cd aadhar-hackathon1
@@ -67,6 +68,7 @@ pip install -r requirements.txt
 # Generate models first (run notebook or use pre-trained .pkl files in models/)
 streamlit run streamlit_app.py
 ```
+Open `http://localhost:8080` or `http://localhost:8501` in your browser.
 
 Open [http://localhost:8501](http://localhost:8501). Use the sidebar to filter by state, date range, and model.
 
@@ -121,6 +123,7 @@ aadhar-hackathon1/
 ├── models/
 │   ├── best_model.pkl               # LightGBM (auto-loaded)
 │   ├── random_forest_model.pkl
+│   ├── ridge_baseline_model.pkl
 │   ├── xgboost_model.pkl
 │   ├── lightgbm_model.pkl
 │   ├── scaler.pkl

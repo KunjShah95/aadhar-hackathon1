@@ -1,0 +1,50 @@
+[
+  {
+    "model": "XGBoost",
+    "train_r2": 0.9441,
+    "test_r2": -0.9126,
+    "train_rmse": 568.39,
+    "test_rmse": 2527.6,
+    "train_mae": 90.88,
+    "test_mae": 1269.45,
+    "test_mape": 1578.79,
+    "training_seconds": 0.8,
+    "model_path": "xgboost_model.pkl"
+  },
+  {
+    "model": "LightGBM",
+    "train_r2": 0.6822,
+    "test_r2": -0.6413,
+    "train_rmse": 1355.36,
+    "test_rmse": 2341.49,
+    "train_mae": 121.99,
+    "test_mae": 1194.8,
+    "test_mape": 1003.94,
+    "training_seconds": 0.91,
+    "model_path": "lightgbm_model.pkl"
+  },
+  {
+    "model": "Random Forest",
+    "train_r2": 0.8727,
+    "test_r2": -0.8961,
+    "train_rmse": 857.82,
+    "test_rmse": 2516.66,
+    "train_mae": 85.86,
+    "test_mae": 1092.27,
+    "test_mape": 599.08,
+    "training_seconds": 1.06,
+    "model_path": "random_forest_model.pkl"
+  },
+  {
+    "model": "Baseline Ridge",
+    "train_r2": 0.2321,
+    "test_r2": 0.3944,
+    "train_rmse": 2106.96,
+    "test_rmse": 1422.31,
+    "train_mae": 358.08,
+    "test_mae": 619.18,
+    "test_mape": 1686.82,
+    "training_seconds": 0.01,
+    "model_path": "baseline_ridge_model.pkl"
+  }
+]

@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-08-22 21:20:57",
+  "overall_drift_status": "NO_DRIFT",
+  "models_health": {
+    "baseline_ridge_model.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
+    },
+    "best_model.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
+    },
+    "lightgbm_model.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'lightgbm.sklearn.LGBMRegressor'>"
+    },
+    "random_forest_model.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.ensemble._forest.RandomForestRegressor'>"
+    },
+    "ridge_baseline_model.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
+    },
+    "xgboost_model.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'xgboost.sklearn.XGBRegressor'>"
+    }
+  },
+  "feature_drift_metrics": {
+    "total_enrolments": {
+      "ks_statistic": 0.085,
+      "p_value": 0.2422,
+      "psi_score": 0.0644,
+      "status": "STABLE"
+    },
+    "demo_total": {
+      "ks_statistic": 0.085,
+      "p_value": 0.2422,
+      "psi_score": 0.0644,
+      "status": "STABLE"
+    },
+    "bio_total": {
+      "ks_statistic": 0.085,
+      "p_value": 0.2422,
+      "psi_score": 0.0644,
+      "status": "STABLE"
+    },
+    "rolling_mean_7": {
+      "ks_statistic": 0.085,
+      "p_value": 0.2422,
+      "psi_score": 0.0644,
+      "status": "STABLE"
+    },
+    "bio_to_enrol_ratio": {
+      "ks_statistic": 0.085,
+      "p_value": 0.2422,
+      "psi_score": 0.0644,
+      "status": "STABLE"
+    }
+  }
+}
