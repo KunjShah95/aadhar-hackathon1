@@ -12,6 +12,7 @@
     "sin_month",
     "cos_month",
     "state_cat",
+    "log_state_pop",
     "lag_1",
     "bio_lag_1",
     "demo_lag_1",
@@ -38,11 +39,13 @@
     "demo_rolling_30",
     "bio_to_enrol_ratio",
     "demo_to_enrol_ratio",
+    "rolling_mean_7_per_1000",
+    "lag_1_per_1000",
     "state_mean_enrol",
     "state_std_enrol",
     "state_median_enrol"
   ],
-  "log_target": true,
+  "log_target": false,
   "raw_target_models": [
     "Ridge Baseline",
     "Random Forest"
