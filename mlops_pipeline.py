@@ -57,18 +57,41 @@ def run_mlops_audit():
             models_health[name] = {"status": "CORRUPTED", "error": str(e)}
 
     # Synthetic / Sample Data Drift Inspection
-    features_to_audit = ["total_enrolments", "demo_total", "bio_total", "rolling_mean_7", "bio_to_enrol_ratio"]
-    
+    features_to_audit = ["total_enrolments", "demo_total", "bio_total"]
+
+    # Load real enrollment data for drift inspection
+    enrol_files = glob.glob(os.path.join(workspace_dir, 'api_data_aadhar_enrolment/**/*.csv'), recursive=True)
+    real_data = {}
+    if enrol_files:
+        dfs = []
+        for f in enrol_files:
+            try:
+                dfs.append(pd.read_csv(f, dtype={'state': str}))
+            except Exception:
+                pass
+        if dfs:
+            raw = pd.concat(dfs, ignore_index=True)
+            raw['date'] = pd.to_datetime(raw['date'], format='%d-%m-%Y', errors='coerce')
+            raw['total_enrolments'] = raw[['age_0_5', 'age_5_17', 'age_18_greater']].fillna(0).sum(axis=1)
+            raw = raw.sort_values('date').dropna(subset=['date'])
+            if len(raw) > 100:
+                split_idx = int(len(raw) * 0.8)
+                real_data['total_enrolments'] = (raw['total_enrolments'].iloc[:split_idx],
+                                                  raw['total_enrolments'].iloc[split_idx:])
+
     drift_metrics = {}
     overall_drift_status = "NO_DRIFT"
 
     for feat in features_to_audit:
-        # Simulate baseline (hist) vs production (target) distributions
-        np.random.seed(42)
-        base_vals = pd.Series(np.random.normal(loc=1000, scale=250, size=500))
-        prod_vals = pd.Series(np.random.normal(loc=1050, scale=270, size=200))
-        
-        ks_stat, p_val = stats.ks_2samp(base_vals, prod_vals)
+        # Use real data if available, else synthetic fallback (demo mode)
+        if feat in real_data:
+            base_vals, prod_vals = real_data[feat]
+        else:
+            np.random.seed(42)
+            base_vals = pd.Series(np.random.normal(loc=1000, scale=250, size=500))
+            prod_vals = pd.Series(np.random.normal(loc=1050, scale=270, size=200))
+
+        ks_stat, p_val = stats.ks_2samp(base_vals.dropna(), prod_vals.dropna())
         psi_val = calculate_psi(base_vals, prod_vals)
         
         status = "STABLE"

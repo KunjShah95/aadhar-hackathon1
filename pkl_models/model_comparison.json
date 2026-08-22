@@ -1,5 +1,17 @@
 [
   {
+    "model": "LSTM (PyTorch)",
+    "train_r2": null,
+    "test_r2": 0.1088,
+    "train_rmse": null,
+    "test_rmse": 1696.59,
+    "train_mae": null,
+    "test_mae": 586.59,
+    "test_mape": null,
+    "training_seconds": null,
+    "model_path": "lstm_model.pt"
+  },
+  {
     "model": "XGBoost",
     "train_r2": 0.9441,
     "test_r2": -0.9126,

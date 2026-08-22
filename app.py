@@ -9,6 +9,35 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+# PyTorch LSTM support (optional — graceful fallback if torch not installed)
+try:
+    import torch
+    import torch.nn as nn
+
+    class AadhaarLSTM(nn.Module):
+        def __init__(self, input_dim, hidden_dim=64, num_layers=2, dropout=0.2):
+            super(AadhaarLSTM, self).__init__()
+            self.lstm = nn.LSTM(
+                input_size=input_dim,
+                hidden_size=hidden_dim,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0
+            )
+            self.fc = nn.Sequential(
+                nn.Linear(hidden_dim, 32),
+                nn.ReLU(),
+                nn.Linear(32, 1)
+            )
+
+        def forward(self, x):
+            lstm_out, _ = self.lstm(x)
+            return self.fc(lstm_out[:, -1, :])
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
 # -----------------------------------------------------------------------------
 # STREAMLIT PAGE CONFIGURATION & CUSTOM CSS STYLING
 # -----------------------------------------------------------------------------
@@ -253,17 +282,67 @@ def load_feature_data(df):
     processed_df = pd.concat(feature_dfs, ignore_index=True).fillna(0)
     return processed_df
 
+@st.cache_resource(show_spinner=False)
 def load_saved_models():
     pkl_dir = 'pkl_models'
     models_dict = {}
-    if os.path.exists(pkl_dir):
-        files = glob.glob(os.path.join(pkl_dir, '*.pkl'))
-        for f in files:
-            name = os.path.basename(f).replace('_model.pkl', '').replace('.pkl', '').replace('_', ' ').title()
-            try:
-                models_dict[name] = joblib.load(f)
-            except Exception:
-                pass
+    if not os.path.exists(pkl_dir):
+        return models_dict
+
+    # Load sklearn/tree-based .pkl models (skip scaler — it's lstm-only)
+    for f in glob.glob(os.path.join(pkl_dir, '*.pkl')):
+        basename = os.path.basename(f)
+        if basename == 'lstm_scaler.pkl':
+            continue
+        name = basename.replace('_model.pkl', '').replace('.pkl', '').replace('_', ' ').title()
+        try:
+            models_dict[name] = joblib.load(f)
+        except Exception:
+            pass
+
+    # Load PyTorch LSTM model
+    lstm_path  = os.path.join(pkl_dir, 'lstm_model.pt')
+    scaler_path = os.path.join(pkl_dir, 'lstm_scaler.pkl')
+    feat_path  = os.path.join(pkl_dir, 'lstm_feature_cols.json')
+    if TORCH_AVAILABLE and os.path.exists(lstm_path):
+        try:
+            # weights_only=False required for custom checkpoint dicts (PyTorch ≥2.6 safe)
+            checkpoint = torch.load(lstm_path, map_location='cpu', weights_only=False)
+            if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+                input_dim  = checkpoint.get('input_dim', 35)
+                hidden_dim = checkpoint.get('hidden_dim', 128)
+                num_layers = checkpoint.get('num_layers', 2)
+                lookback   = checkpoint.get('lookback', 14)
+            else:
+                # Legacy plain state_dict — infer dims from weight shapes
+                state_dict = checkpoint
+                key        = next(k for k in state_dict if 'weight_ih_l0' in k)
+                input_dim  = state_dict[key].shape[1]
+                hidden_dim = state_dict[key].shape[0] // 4  # 4 LSTM gates
+                num_layers = 2
+                lookback   = 14
+
+            lstm_model = AadhaarLSTM(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers)
+            lstm_model.load_state_dict(state_dict)
+            lstm_model.eval()
+
+            scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
+            with open(feat_path) as fh:
+                feat_cols = json.load(fh)
+            if not os.path.exists(feat_path):
+                feat_cols = None
+
+            models_dict['LSTM (PyTorch)'] = {
+                '_type': 'lstm',
+                'model': lstm_model,
+                'scaler': scaler,
+                'feature_cols': feat_cols,
+                'lookback': lookback,
+            }
+        except Exception as e:
+            st.warning(f"LSTM load error: {e}")
+
     return models_dict
 
 # -----------------------------------------------------------------------------
@@ -281,14 +360,19 @@ with st.spinner("Loading Multi-Shard Data & Models..."):
 st.sidebar.title("🎛️ Navigation & Filters")
 selected_state = st.sidebar.selectbox("Filter State", ["All States"] + sorted([s for s in panel_df['norm_state'].dropna().unique()]))
 
-date_min = panel_df['date'].min().date()
-date_max = panel_df['date'].max().date()
-selected_dates = st.sidebar.date_input("Date Range", value=[date_min, date_max], min_value=date_min, max_value=date_max)
-
-if len(selected_dates) == 2:
-    start_date, end_date = selected_dates
-    filtered_df = panel_df[(panel_df['date'].dt.date >= start_date) & (panel_df['date'].dt.date <= end_date)].copy()
+# Guard against empty dataset (no CSVs loaded) — pd.NaT has no .date()
+_date_col = panel_df['date'].dropna()
+if not _date_col.empty:
+    date_min = _date_col.min().date()
+    date_max = _date_col.max().date()
+    selected_dates = st.sidebar.date_input("Date Range", value=[date_min, date_max], min_value=date_min, max_value=date_max)
+    if len(selected_dates) == 2:
+        start_date, end_date = selected_dates
+        filtered_df = panel_df[(panel_df['date'].dt.date >= start_date) & (panel_df['date'].dt.date <= end_date)].copy()
+    else:
+        filtered_df = panel_df.copy()
 else:
+    st.sidebar.warning("No enrollment data found. Add CSVs to api_data_aadhar_enrolment/")
     filtered_df = panel_df.copy()
 
 if selected_state != "All States":
@@ -459,12 +543,16 @@ with tab3:
         with open(comp_file, 'r') as f:
             comp_data = json.load(f)
         
-        comp_df = pd.DataFrame(comp_data).sort_values('test_r2', ascending=False)
-        st.dataframe(
-            comp_df.style.highlight_max(axis=0, subset=['test_r2'], color='#2e7d32')
-                   .highlight_min(axis=0, subset=['test_rmse', 'test_mae'], color='#2e7d32'),
-            use_container_width=True
-        )
+        comp_df = pd.DataFrame(comp_data).sort_values('test_r2', ascending=False, na_position='last')
+        # Only highlight columns that have at least one non-NaN value (avoids Styler crash)
+        _r2_has_data  = comp_df['test_r2'].notna().any()
+        _err_has_data = comp_df['test_rmse'].notna().any() and comp_df['test_mae'].notna().any()
+        styled = comp_df.style
+        if _r2_has_data:
+            styled = styled.highlight_max(axis=0, subset=['test_r2'], color='#2e7d32')
+        if _err_has_data:
+            styled = styled.highlight_min(axis=0, subset=['test_rmse', 'test_mae'], color='#2e7d32')
+        st.dataframe(styled, use_container_width=True)
         
         # Download Benchmark CSV button
         st.download_button(
@@ -497,8 +585,9 @@ with tab4:
     
     col1, col2 = st.columns(2)
     with col1:
-        model_choice = st.selectbox("Select Machine Learning Model", list(models_dict.keys()) if models_dict else ["Baseline Ridge", "XGBoost", "LightGBM", "Random Forest"])
-        state_choice = st.selectbox("Select State for Forecast", sorted([s for s in panel_df['norm_state'].dropna().unique()]))
+        model_choice = st.selectbox("Select Machine Learning Model", list(models_dict.keys()) if models_dict else ["No models loaded"])
+        _state_opts = sorted(panel_df['norm_state'].dropna().unique().tolist())
+        state_choice = st.selectbox("Select State for Forecast", _state_opts if _state_opts else ["No data"])
     
     with col2:
         days_ahead = st.slider("Forecast Horizon (Days)", min_value=1, max_value=30, value=14)
@@ -507,23 +596,50 @@ with tab4:
         state_data = processed_df[processed_df['norm_state'] == state_choice].sort_values('date')
         if not state_data.empty and model_choice in models_dict:
             model_obj = models_dict[model_choice]
-            
+
             exclude_cols = [
                 'date', 'norm_state', 'state', 'district', 'pincode',
                 'age_0_5', 'age_5_17', 'age_18_greater', 'total_enrolments',
                 'demo_age_5_17', 'demo_age_17_', 'demo_total',
                 'bio_age_5_17', 'bio_age_17_', 'bio_total'
             ]
-            feature_cols = [c for c in state_data.columns if c not in exclude_cols]
-            
-            latest_features = state_data[feature_cols].tail(1)
-            pred_median = max(0.0, float(model_obj.predict(latest_features)[0]))
-            
+
+            # ── LSTM inference path ──────────────────────────────────────
+            if isinstance(model_obj, dict) and model_obj.get('_type') == 'lstm':
+                lstm_net = model_obj['model']
+                scaler = model_obj['scaler']
+                feat_cols = model_obj['feature_cols']
+                lookback = model_obj['lookback']
+
+                if feat_cols is None:
+                    feat_cols = [c for c in state_data.columns if c not in exclude_cols]
+
+                seq_df = state_data[feat_cols].tail(lookback).copy()
+                if scaler is not None:
+                    seq_arr = scaler.transform(seq_df.values)
+                else:
+                    seq_arr = seq_df.values.astype(float)
+
+                if len(seq_arr) < lookback:
+                    pad = np.zeros((lookback - len(seq_arr), seq_arr.shape[1]))
+                    seq_arr = np.vstack([pad, seq_arr])
+
+                x_tensor = torch.tensor(seq_arr[np.newaxis], dtype=torch.float32)
+                with torch.no_grad():
+                    log_pred = lstm_net(x_tensor).item()
+                pred_median = float(np.expm1(max(0.0, log_pred)))
+
+            # ── Sklearn / tree-model inference path ──────────────────────
+            else:
+                feature_cols = [c for c in state_data.columns if c not in exclude_cols]
+                latest_features = state_data[feature_cols].tail(1)
+                pred_median = max(0.0, float(model_obj.predict(latest_features)[0]))
+
             # Estimate residual uncertainty std
             hist_std = float(state_data['total_enrolments'].tail(30).std())
             if np.isnan(hist_std) or hist_std == 0:
                 hist_std = pred_median * 0.15
-                
+
             pred_p10 = max(0.0, pred_median - 1.28 * hist_std)
             pred_p90 = pred_median + 1.28 * hist_std
             
@@ -591,52 +707,52 @@ with tab5:
         
         anom_results.append(group[group['is_anomaly']])
         
-    if anom_results:
-        anom_full = pd.concat(anom_results, ignore_index=True)
+    # anom_results always contains entries (possibly empty DFs) — check content, not list length
+    anom_full = pd.concat(anom_results, ignore_index=True) if anom_results else pd.DataFrame()
+    if not anom_full.empty:
         st.metric("Total Flagged Anomaly Events", f"{len(anom_full)}")
-        
-        if not anom_full.empty:
-            # Download Anomaly CSV button
-            st.download_button(
-                label="📥 Download Flagged Anomaly Log CSV",
-                data=anom_full[['date', 'norm_state', 'total_enrolments', 'z_score']].to_csv(index=False).encode('utf-8'),
-                file_name="aadhaar_flagged_anomalies.csv",
-                mime="text/csv"
-            )
-            
-            st.dataframe(
-                anom_full[['date', 'norm_state', 'total_enrolments', 'z_score']]
-                .sort_values('z_score', ascending=False)
-                .head(20),
-                use_container_width=True
-            )
-            
-            # Interactive Webhook Payload Simulator
-            st.subheader("🔔 Automated Webhook Alert Dispatch Simulator")
-            if st.button("⚡ Simulate Sending Webhook Payload Alert for Top Anomaly Spike"):
-                top_row = anom_full.sort_values('z_score', ascending=False).iloc[0]
-                payload = {
-                    "event": "AADHAAR_CAMPAIGN_SPIKE_DETECTED",
-                    "timestamp": top_row['date'].strftime('%Y-%m-%d'),
-                    "state": top_row['norm_state'],
-                    "observed_volume": int(top_row['total_enrolments']),
-                    "z_score": round(float(top_row['z_score']), 2),
-                    "severity": "CRITICAL" if abs(top_row['z_score']) > 4.0 else "WARNING",
-                    "webhook_target": "https://api.uidai.gov.in/alerts/v1/webhook"
-                }
-                st.code(json.dumps(payload, indent=2), language="json")
-                st.success("✅ Simulated Webhook alert payload dispatched to UIDAI Monitoring Endpoint!")
 
-            fig_anom = px.scatter(
-                anom_full,
-                x='date',
-                y='total_enrolments',
-                color='norm_state',
-                size=np.abs(anom_full['z_score']),
-                template='plotly_dark',
-                title='Detected Campaign Spikes across States'
-            )
-            fig_anom.update_layout(height=450)
-            st.plotly_chart(fig_anom, use_container_width=True)
+        # Download Anomaly CSV button
+        st.download_button(
+            label="📥 Download Flagged Anomaly Log CSV",
+            data=anom_full[['date', 'norm_state', 'total_enrolments', 'z_score']].to_csv(index=False).encode('utf-8'),
+            file_name="aadhaar_flagged_anomalies.csv",
+            mime="text/csv"
+        )
+
+        st.dataframe(
+            anom_full[['date', 'norm_state', 'total_enrolments', 'z_score']]
+            .sort_values('z_score', ascending=False)
+            .head(20),
+            use_container_width=True
+        )
+
+        # Interactive Webhook Payload Simulator
+        st.subheader("🔔 Automated Webhook Alert Dispatch Simulator")
+        if st.button("⚡ Simulate Sending Webhook Payload Alert for Top Anomaly Spike"):
+            top_row = anom_full.sort_values('z_score', ascending=False).iloc[0]
+            payload = {
+                "event": "AADHAAR_CAMPAIGN_SPIKE_DETECTED",
+                "timestamp": top_row['date'].strftime('%Y-%m-%d'),
+                "state": top_row['norm_state'],
+                "observed_volume": int(top_row['total_enrolments']),
+                "z_score": round(float(top_row['z_score']), 2),
+                "severity": "CRITICAL" if abs(top_row['z_score']) > 4.0 else "WARNING",
+                "webhook_target": "https://api.uidai.gov.in/alerts/v1/webhook"
+            }
+            st.code(json.dumps(payload, indent=2), language="json")
+            st.success("✅ Simulated Webhook alert payload dispatched to UIDAI Monitoring Endpoint!")
+
+        fig_anom = px.scatter(
+            anom_full,
+            x='date',
+            y='total_enrolments',
+            color='norm_state',
+            size=np.abs(anom_full['z_score']),
+            template='plotly_dark',
+            title='Detected Campaign Spikes across States'
+        )
+        fig_anom.update_layout(height=450)
+        st.plotly_chart(fig_anom, use_container_width=True)
     else:
         st.info("No anomalies detected at current threshold.")

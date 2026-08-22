@@ -56,13 +56,15 @@ Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge 
 
 ## Machine Learning Models
 
-| Model | R² | RMSE | MAE | File |
+| Model | Test R² | Test RMSE | Test MAE | File |
 |---|---|---|---|---|
-| **LightGBM** ⭐ | **0.8276** | 721 | 542 | `lightgbm_model.pkl` |
-| XGBoost | 0.8123 | 757 | 578 | `xgboost_model.pkl` |
-| Random Forest | 0.7845 | 892 | 645 | `random_forest_model.pkl` |
-| Ridge Baseline | — | — | — | `ridge_baseline_model.pkl` |
-| LSTM (PyTorch) | — | — | — | `lstm_model.pt` |
+| **Ridge Baseline** ⭐ | **0.3944** | 1422 | 619 | `ridge_baseline_model.pkl` |
+| LSTM (PyTorch) | 0.1088 | 1697 | 587 | `lstm_model.pt` |
+| LightGBM | −0.6413 | 2341 | 1195 | `lightgbm_model.pkl` |
+| Random Forest | −0.8961 | 2517 | 1092 | `random_forest_model.pkl` |
+| XGBoost | −0.9126 | 2528 | 1269 | `xgboost_model.pkl` |
+
+> **Note:** Tree models overfit on train (R² ≈ 0.87–0.94) but generalise poorly on the held-out temporal test split — a known challenge with panel time-series on sparse government datasets. Ridge and LSTM generalise best. Re-train with more data or longer rolling windows to improve tree model test scores.
 
 **Top predictive features** (LightGBM): `enrol_rolling_mean_30d`, `days_since_start`, `enrol_lag_7d`, `state_avg_enrol`, `month`
 
