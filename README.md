@@ -56,17 +56,18 @@ Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge 
 
 ## Machine Learning Models
 
-| Model | Test R² | Test RMSE | Test MAE | Target | File |
-|---|---|---|---|---|---|
-| **Ridge Baseline** 🥇 | **0.4182** | 1,394 | 573 | raw | `ridge_baseline_model.pkl` |
-| **LightGBM** 🥈 | **0.2632** | 1,569 | 614 | log1p | `lightgbm_model.pkl` |
-| **XGBoost** 🥉 | **0.2506** | 1,582 | 541 | log1p | `xgboost_model.pkl` |
-| LSTM (PyTorch) | 0.1970 | 1,610 | 622 | log1p | `lstm_model.pt` |
-| Random Forest | 0.1790 | 1,656 | 605 | raw | `random_forest_model.pkl` |
+| Model | Test R² | Test RMSE | Test MAE | Notes |
+|---|---|---|---|---|
+| **Ensemble** 🥇 | **0.3817** | 1,437 | 490 | Inverse-RMSE blend of all 4 base models |
+| Ridge Baseline | 0.3550 | 1,468 | 496 | Raw target + StandardScaler |
+| LightGBM | 0.2885 | 1,542 | 506 | log1p target |
+| XGBoost | 0.2753 | 1,556 | 507 | log1p target |
+| LSTM (PyTorch) | 0.1970 | 1,610 | 622 | PyTorch seq2one, log1p target |
+| Random Forest | 0.1879 | 1,647 | 594 | Raw target + StandardScaler |
 
-> **All 5 models now generalise positively** on the temporal test split. Key fixes: log1p target stabilises cross-state scale (UP millions vs Lakshadweep hundreds); Ridge/RF use StandardScaler on raw target (log-space extrapolation causes catastrophic expm1 blow-up for linear models); stronger regularisation for gradient boosting (max_depth=4, min_child_weight=10, reg_lambda=5).
+> **All 6 models (including Ensemble) generalise positively** on the temporal test split (Oct–Dec 2025). Key engineering: India 2025 holiday calendar features (is_holiday, days_to_holiday, holiday_proximity); 2021 census state population features; log1p target for gradient boosting; StandardScaler + raw target for Ridge/RF; inverse-RMSE ensemble weighting.
 
-**Top predictive features**: `rolling_mean_30`, `days_since_start`, `lag_7`, `state_mean_enrol`, `month`
+**Top predictive features** (SHAP — LightGBM): `rolling_mean_30`, `lag_1`, `days_since_start`, `state_mean_enrol`, `holiday_proximity`, `lag_1_per_1000`
 
 All model artifacts are pre-trained and committed to the `pkl_models/` directory, so the app loads instantly without re-training.
 

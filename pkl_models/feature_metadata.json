@@ -13,6 +13,11 @@
     "cos_month",
     "state_cat",
     "log_state_pop",
+    "is_holiday",
+    "days_to_holiday",
+    "days_since_holiday",
+    "holiday_proximity",
+    "holiday_recency",
     "lag_1",
     "bio_lag_1",
     "demo_lag_1",
@@ -39,8 +44,8 @@
     "demo_rolling_30",
     "bio_to_enrol_ratio",
     "demo_to_enrol_ratio",
-    "rolling_mean_7_per_1000",
     "lag_1_per_1000",
+    "rolling_mean_7_per_1000",
     "state_mean_enrol",
     "state_std_enrol",
     "state_median_enrol"
@@ -54,5 +59,11 @@
     "XGBoost",
     "LightGBM"
   ],
+  "ensemble_weights": {
+    "Ridge Baseline": 0.2640761904357003,
+    "Random Forest": 0.23534988125108183,
+    "XGBoost": 0.24913620352876895,
+    "LightGBM": 0.25143772478444887
+  },
   "split_date": "2025-10-31"
 }

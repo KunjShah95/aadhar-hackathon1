@@ -265,9 +265,54 @@ def load_feature_data(df):
     full_df['cos_month'] = np.cos(2 * np.pi * full_df['month'] / 12)
     full_df['state_cat'] = full_df['norm_state'].astype('category').cat.codes
 
+    # Population features
+    _STATE_POP = {
+        'Andaman & Nicobar': 397_000, 'Andhra Pradesh': 49_577_103,
+        'Arunachal Pradesh': 1_570_458, 'Assam': 34_293_000,
+        'Bihar': 121_243_000, 'Chandigarh': 1_158_000,
+        'Chhattisgarh': 28_724_000,
+        'Dadra & Nagar Haveli and Daman & Diu': 615_000,
+        'Delhi': 20_667_656, 'Goa': 1_586_250, 'Gujarat': 66_750_000,
+        'Haryana': 28_204_000, 'Himachal Pradesh': 7_503_000,
+        'Jammu and Kashmir': 14_999_397, 'Jharkhand': 36_480_000,
+        'Karnataka': 66_165_000, 'Kerala': 35_125_000,
+        'Ladakh': 316_000, 'Lakshadweep': 73_183,
+        'Madhya Pradesh': 82_232_000, 'Maharashtra': 123_144_000,
+        'Manipur': 3_091_545, 'Meghalaya': 3_366_710, 'Mizoram': 1_239_244,
+        'Nagaland': 2_157_059, 'Odisha': 45_429_000, 'Puducherry': 1_413_542,
+        'Punjab': 30_141_373, 'Rajasthan': 79_502_477, 'Sikkim': 682_000,
+        'Tamil Nadu': 77_841_000, 'Telangana': 38_705_209, 'Tripura': 4_169_794,
+        'Uttar Pradesh': 231_502_578, 'Uttarakhand': 11_250_858,
+        'West Bengal': 100_896_618,
+    }
+    _MEDIAN_POP = int(np.median(list(_STATE_POP.values())))
+    full_df['log_state_pop'] = np.log1p(
+        full_df['norm_state'].map(_STATE_POP).fillna(_MEDIAN_POP))
+
+    # Holiday features (India 2025)
+    _HOLIDAYS = pd.to_datetime([
+        '2025-03-14','2025-03-31','2025-04-06','2025-04-14','2025-04-18',
+        '2025-05-01','2025-06-06','2025-06-27','2025-07-06','2025-08-15',
+        '2025-08-16','2025-09-05','2025-10-02','2025-10-20','2025-10-21',
+        '2025-10-22','2025-11-05','2025-12-25',
+    ])
+    dates_arr = pd.to_datetime(full_df['date'])
+    full_df['is_holiday'] = dates_arr.isin(_HOLIDAYS).astype(int)
+    _days_to   = np.zeros(len(full_df), dtype=float)
+    _days_from = np.zeros(len(full_df), dtype=float)
+    for i, d in enumerate(dates_arr):
+        _f = _HOLIDAYS[_HOLIDAYS > d]; _p = _HOLIDAYS[_HOLIDAYS <= d]
+        _days_to[i]   = min((_f.min() - d).days, 30) if len(_f) > 0 else 30
+        _days_from[i] = min((d - _p.max()).days, 30) if len(_p) > 0 else 30
+    full_df['days_to_holiday']    = _days_to
+    full_df['days_since_holiday'] = _days_from
+    full_df['holiday_proximity']  = np.exp(-_days_to / 7)
+    full_df['holiday_recency']    = np.exp(-_days_from / 7)
+
     feature_dfs = []
     for state, group in full_df.groupby('norm_state'):
         group = group.sort_values('date').copy()
+        pop = _STATE_POP.get(state, _MEDIAN_POP)
         for lag in [1, 7, 14, 30]:
             group[f'lag_{lag}']      = group['total_enrolments'].shift(lag)
             group[f'bio_lag_{lag}']  = group['bio_total'].shift(lag)
@@ -280,6 +325,8 @@ def load_feature_data(df):
             group[f'demo_rolling_{w}'] = group['demo_total'].shift(1).rolling(w, min_periods=1).mean()
         group['bio_to_enrol_ratio']  = (group['bio_rolling_7']  / (group['rolling_mean_7'] + 1)).fillna(0)
         group['demo_to_enrol_ratio'] = (group['demo_rolling_7'] / (group['rolling_mean_7'] + 1)).fillna(0)
+        group['lag_1_per_1000']          = group['lag_1']          / pop * 1000
+        group['rolling_mean_7_per_1000'] = group['rolling_mean_7'] / pop * 1000
         feature_dfs.append(group)
 
     processed_df = pd.concat(feature_dfs, ignore_index=True).fillna(0)
@@ -303,10 +350,22 @@ def load_saved_models():
     if not os.path.exists(pkl_dir):
         return models_dict
 
-    # Load sklearn/tree-based .pkl models (skip scaler — it's lstm-only)
+    # Pkl files that are scalers/metadata — not loadable as standalone models
+    _SKIP_PKL = {
+        'lstm_scaler.pkl', 'raw_target_scaler.pkl', 'ridge_scaler.pkl',
+        'percapita_scaler.pkl', 'ridge_percapita_model.pkl',
+        'state_specific_ridge.pkl',
+    }
     for f in glob.glob(os.path.join(pkl_dir, '*.pkl')):
         basename = os.path.basename(f)
-        if basename == 'lstm_scaler.pkl':
+        if basename in _SKIP_PKL:
+            continue
+        # ensemble_meta.pkl is a dict with weights, not a model
+        if basename == 'ensemble_meta.pkl':
+            try:
+                models_dict['Ensemble'] = joblib.load(f)
+            except Exception:
+                pass
             continue
         name = basename.replace('_model.pkl', '').replace('.pkl', '').replace('_', ' ').title()
         try:
@@ -591,6 +650,56 @@ with tab3:
     else:
         st.info("Model comparison json not found. Run training in notebook 02 to populate benchmarks.")
 
+    # ── SHAP Feature Importance ───────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("🔍 SHAP Feature Importance (LightGBM)")
+    _lgbm_path = os.path.join('pkl_models', 'lightgbm_model.pkl')
+    _meta_path  = os.path.join('pkl_models', 'feature_metadata.json')
+    if os.path.exists(_lgbm_path) and os.path.exists(_meta_path):
+        try:
+            import shap
+            _lgbm_model = joblib.load(_lgbm_path)
+            with open(_meta_path) as _fh:
+                _feat_meta = json.load(_fh)
+            _feat_cols = _feat_meta.get('feature_cols', [])
+            # Sample from processed_df for SHAP (max 500 rows — fast)
+            _shap_df = processed_df[[c for c in _feat_cols if c in processed_df.columns]].dropna().sample(
+                min(500, len(processed_df)), random_state=42)
+            _explainer  = shap.TreeExplainer(_lgbm_model)
+            _shap_vals  = _explainer.shap_values(_shap_df)
+            _mean_abs   = np.abs(_shap_vals).mean(axis=0)
+            _shap_series = pd.Series(_mean_abs, index=_shap_df.columns).sort_values(ascending=False).head(20)
+            fig_shap = px.bar(
+                x=_shap_series.values[::-1],
+                y=_shap_series.index[::-1],
+                orientation='h',
+                template='plotly_dark',
+                title='Top 20 Features by Mean |SHAP| Value (LightGBM)',
+                labels={'x': 'Mean |SHAP|', 'y': 'Feature'},
+                color=_shap_series.values[::-1],
+                color_continuous_scale='Teal',
+            )
+            fig_shap.update_layout(height=600, showlegend=False)
+            st.plotly_chart(fig_shap, use_container_width=True)
+            with st.expander("📋 Full SHAP importance table"):
+                st.dataframe(
+                    pd.DataFrame({'Feature': _shap_series.index, 'Mean |SHAP|': _shap_series.values.round(4)}),
+                    use_container_width=True)
+        except Exception as _shap_err:
+            # Fallback: built-in LightGBM feature importance
+            try:
+                _lgbm_model = joblib.load(_lgbm_path)
+                _fi = pd.Series(_lgbm_model.feature_importances_,
+                                index=_lgbm_model.feature_name_).sort_values(ascending=False).head(20)
+                fig_fi = px.bar(_fi[::-1], orientation='h', template='plotly_dark',
+                                title='Top 20 Features — LightGBM Gain Importance')
+                fig_fi.update_layout(height=500)
+                st.plotly_chart(fig_fi, use_container_width=True)
+            except Exception:
+                st.info(f"Feature importance unavailable: {_shap_err}")
+    else:
+        st.info("Train LightGBM model (notebook 02) to see SHAP importance.")
+
 # -----------------------------------------------------------------------------
 # TAB 4: LIVE FORECAST PREDICTOR WITH QUANTILE UNCERTAINTY BOUNDS
 # -----------------------------------------------------------------------------
@@ -643,32 +752,55 @@ with tab4:
                     log_pred = lstm_net(x_tensor).item()
                 pred_median = float(np.expm1(max(0.0, log_pred)))
 
-            # ── Sklearn / tree-model inference path ──────────────────────
+            # ── Sklearn / tree-model / Ensemble inference path ───────────
             else:
-                # Use exact feature_cols saved at training time if available
                 _meta_path = os.path.join('pkl_models', 'feature_metadata.json')
                 if os.path.exists(_meta_path):
                     with open(_meta_path) as _fh:
                         _meta = json.load(_fh)
                     _trained_cols = _meta.get('feature_cols', [])
                     _raw_target_models = _meta.get('raw_target_models', ['Ridge Baseline', 'Random Forest'])
-                    # Keep only cols that exist in state_data
+                    _ens_weights = _meta.get('ensemble_weights', {})
                     feature_cols = [c for c in _trained_cols if c in state_data.columns]
                 else:
                     _raw_target_models = ['Ridge Baseline', 'Random Forest']
+                    _ens_weights = {}
                     feature_cols = [c for c in state_data.columns if c not in exclude_cols]
 
                 latest_features = state_data[feature_cols].tail(1)
-                _model_name = model_choice  # the display name chosen in UI
-
-                # Ridge / RF: trained on raw target with StandardScaler — predict directly
                 _scaler_path = os.path.join('pkl_models', 'raw_target_scaler.pkl')
-                if any(m.lower() in _model_name.lower() for m in _raw_target_models) and os.path.exists(_scaler_path):
+
+                # ── Ensemble: blend all 4 base models ───────────────────
+                if isinstance(model_obj, dict) and 'weights' in model_obj:
+                    _ens_w = model_obj['weights']
+                    _ens_pred = 0.0
+                    _raw_scaler = joblib.load(_scaler_path) if os.path.exists(_scaler_path) else None
+                    _scaled = _raw_scaler.transform(latest_features) if _raw_scaler else latest_features.values
+                    _model_files = {
+                        'Ridge Baseline': 'ridge_baseline_model.pkl',
+                        'Random Forest':  'random_forest_model.pkl',
+                        'XGBoost':        'xgboost_model.pkl',
+                        'LightGBM':       'lightgbm_model.pkl',
+                    }
+                    for _mn, _mf in _model_files.items():
+                        _mp = os.path.join('pkl_models', _mf)
+                        if not os.path.exists(_mp) or _mn not in _ens_w: continue
+                        _bm = joblib.load(_mp)
+                        _w  = _ens_w[_mn]
+                        if _mn in _raw_target_models:
+                            _p = max(0.0, float(_bm.predict(_scaled)[0]))
+                        else:
+                            _p = max(0.0, float(np.expm1(max(0.0, _bm.predict(latest_features)[0]))))
+                        _ens_pred += _w * _p
+                    pred_median = max(0.0, _ens_pred)
+
+                # ── Ridge / RF: raw target + StandardScaler ──────────────
+                elif any(m.lower() in model_choice.lower() for m in _raw_target_models) and os.path.exists(_scaler_path):
                     _raw_scaler = joblib.load(_scaler_path)
-                    _scaled_feat = _raw_scaler.transform(latest_features)
-                    pred_median = max(0.0, float(model_obj.predict(_scaled_feat)[0]))
+                    pred_median = max(0.0, float(model_obj.predict(_raw_scaler.transform(latest_features))[0]))
+
+                # ── Gradient boosting: log1p target ──────────────────────
                 else:
-                    # Gradient boosting: log1p target — apply expm1 to recover original scale
                     log_pred = float(model_obj.predict(latest_features)[0])
                     pred_median = max(0.0, float(np.expm1(max(0.0, log_pred))))
 
