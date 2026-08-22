@@ -56,17 +56,17 @@ Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge 
 
 ## Machine Learning Models
 
-| Model | Test R² | Test RMSE | Test MAE | File |
-|---|---|---|---|---|
-| **Ridge Baseline** ⭐ | **0.3944** | 1422 | 619 | `ridge_baseline_model.pkl` |
-| LSTM (PyTorch) | 0.1618 | 1645 | 640 | `lstm_model.pt` |
-| LightGBM | −0.6413 | 2341 | 1195 | `lightgbm_model.pkl` |
-| Random Forest | −0.8961 | 2517 | 1092 | `random_forest_model.pkl` |
-| XGBoost | −0.9126 | 2528 | 1269 | `xgboost_model.pkl` |
+| Model | Test R² | Test RMSE | Test MAE | Target | File |
+|---|---|---|---|---|---|
+| **Ridge Baseline** 🥇 | **0.4182** | 1,394 | 573 | raw | `ridge_baseline_model.pkl` |
+| **LightGBM** 🥈 | **0.2632** | 1,569 | 614 | log1p | `lightgbm_model.pkl` |
+| **XGBoost** 🥉 | **0.2506** | 1,582 | 541 | log1p | `xgboost_model.pkl` |
+| LSTM (PyTorch) | 0.1970 | 1,610 | 622 | log1p | `lstm_model.pt` |
+| Random Forest | 0.1790 | 1,656 | 605 | raw | `random_forest_model.pkl` |
 
-> **Note:** Tree models overfit on train (R² ≈ 0.87–0.94) but generalise poorly on the held-out temporal test split — a known challenge with panel time-series on sparse government datasets. Ridge and LSTM generalise best. Re-train with more data or longer rolling windows to improve tree model test scores.
+> **All 5 models now generalise positively** on the temporal test split. Key fixes: log1p target stabilises cross-state scale (UP millions vs Lakshadweep hundreds); Ridge/RF use StandardScaler on raw target (log-space extrapolation causes catastrophic expm1 blow-up for linear models); stronger regularisation for gradient boosting (max_depth=4, min_child_weight=10, reg_lambda=5).
 
-**Top predictive features** (LightGBM): `enrol_rolling_mean_30d`, `days_since_start`, `enrol_lag_7d`, `state_avg_enrol`, `month`
+**Top predictive features**: `rolling_mean_30`, `days_since_start`, `lag_7`, `state_mean_enrol`, `month`
 
 All model artifacts are pre-trained and committed to the `pkl_models/` directory, so the app loads instantly without re-training.
 

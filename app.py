@@ -230,56 +230,70 @@ def load_raw_data():
 
 @st.cache_data(show_spinner=False)
 def load_feature_data(df):
+    """Leak-free feature pipeline — column names match trained models exactly."""
     df = df.copy()
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values(['norm_state', 'date']).reset_index(drop=True)
-    
-    states = df['norm_state'].dropna().unique()
+
+    if df.empty or df['date'].dropna().empty:
+        return df
+
+    states    = df['norm_state'].dropna().unique()
     all_dates = pd.date_range(df['date'].min(), df['date'].max(), freq='D')
-    
-    grid = pd.MultiIndex.from_product([states, all_dates], names=['norm_state', 'date']).to_frame().reset_index(drop=True)
+    grid = pd.MultiIndex.from_product([states, all_dates], names=['norm_state', 'date']).to_frame(index=False)
     full_df = pd.merge(grid, df, on=['norm_state', 'date'], how='left')
-    
-    num_cols = ['age_0_5', 'age_5_17', 'age_18_greater', 'total_enrolments',
+
+    for col in ['age_0_5', 'age_5_17', 'age_18_greater', 'total_enrolments',
                 'demo_age_5_17', 'demo_age_17_', 'demo_total',
-                'bio_age_5_17', 'bio_age_17_', 'bio_total']
-    for col in num_cols:
+                'bio_age_5_17', 'bio_age_17_', 'bio_total']:
         if col in full_df.columns:
             full_df[col] = full_df[col].fillna(0)
-            
-    full_df['day_of_week'] = full_df['date'].dt.dayofweek
-    full_df['day_of_month'] = full_df['date'].dt.day
-    full_df['month'] = full_df['date'].dt.month
-    full_df['quarter'] = full_df['date'].dt.quarter
-    full_df['day_of_year'] = full_df['date'].dt.dayofyear
-    full_df['is_weekend'] = full_df['day_of_week'].isin([5, 6]).astype(int)
-    
-    full_df['sin_day_of_week'] = np.sin(2 * np.pi * full_df['day_of_week'] / 7)
-    full_df['cos_day_of_week'] = np.cos(2 * np.pi * full_df['day_of_week'] / 7)
+
+    # Calendar
+    full_df['day_of_week']      = full_df['date'].dt.dayofweek
+    full_df['day_of_month']     = full_df['date'].dt.day
+    full_df['month']            = full_df['date'].dt.month
+    full_df['quarter']          = full_df['date'].dt.quarter
+    full_df['day_of_year']      = full_df['date'].dt.dayofyear
+    full_df['is_weekend']       = full_df['day_of_week'].isin([5, 6]).astype(int)
+    full_df['days_since_start'] = (full_df['date'] - full_df['date'].min()).dt.days
+
+    # Cyclical (names match nb02/nb03)
+    full_df['sin_dow']   = np.sin(2 * np.pi * full_df['day_of_week'] / 7)
+    full_df['cos_dow']   = np.cos(2 * np.pi * full_df['day_of_week'] / 7)
     full_df['sin_month'] = np.sin(2 * np.pi * full_df['month'] / 12)
     full_df['cos_month'] = np.cos(2 * np.pi * full_df['month'] / 12)
-
     full_df['state_cat'] = full_df['norm_state'].astype('category').cat.codes
 
     feature_dfs = []
     for state, group in full_df.groupby('norm_state'):
         group = group.sort_values('date').copy()
         for lag in [1, 7, 14, 30]:
-            group[f'lag_{lag}'] = group['total_enrolments'].shift(lag)
-            group[f'bio_lag_{lag}'] = group['bio_total'].shift(lag)
+            group[f'lag_{lag}']      = group['total_enrolments'].shift(lag)
+            group[f'bio_lag_{lag}']  = group['bio_total'].shift(lag)
             group[f'demo_lag_{lag}'] = group['demo_total'].shift(lag)
-            
-        for window in [7, 14, 30]:
-            group[f'rolling_mean_{window}'] = group['total_enrolments'].shift(1).rolling(window=window, min_periods=1).mean()
-            group[f'rolling_std_{window}'] = group['total_enrolments'].shift(1).rolling(window=window, min_periods=1).std().fillna(0)
-            group[f'bio_rolling_mean_{window}'] = group['bio_total'].shift(1).rolling(window=window, min_periods=1).mean()
-            group[f'demo_rolling_mean_{window}'] = group['demo_total'].shift(1).rolling(window=window, min_periods=1).mean()
-
-        group['bio_to_enrol_ratio'] = (group['bio_rolling_mean_7'] / (group['rolling_mean_7'] + 1)).fillna(0)
-        group['demo_to_enrol_ratio'] = (group['demo_rolling_mean_7'] / (group['rolling_mean_7'] + 1)).fillna(0)
+        for w in [7, 14, 30]:
+            s = group['total_enrolments'].shift(1)
+            group[f'rolling_mean_{w}'] = s.rolling(w, min_periods=1).mean()
+            group[f'rolling_std_{w}']  = s.rolling(w, min_periods=1).std().fillna(0)
+            group[f'bio_rolling_{w}']  = group['bio_total'].shift(1).rolling(w, min_periods=1).mean()
+            group[f'demo_rolling_{w}'] = group['demo_total'].shift(1).rolling(w, min_periods=1).mean()
+        group['bio_to_enrol_ratio']  = (group['bio_rolling_7']  / (group['rolling_mean_7'] + 1)).fillna(0)
+        group['demo_to_enrol_ratio'] = (group['demo_rolling_7'] / (group['rolling_mean_7'] + 1)).fillna(0)
         feature_dfs.append(group)
-        
+
     processed_df = pd.concat(feature_dfs, ignore_index=True).fillna(0)
+
+    # Merge state-level scale features (computed on train, saved by nb02)
+    state_stats_path = os.path.join('pkl_models', 'state_stats.csv')
+    if os.path.exists(state_stats_path):
+        state_stats = pd.read_csv(state_stats_path)
+        processed_df = processed_df.merge(state_stats, on='norm_state', how='left')
+        global_mean = float(state_stats['state_mean_enrol'].mean())
+        for c in ['state_mean_enrol', 'state_std_enrol', 'state_median_enrol']:
+            if c in processed_df.columns:
+                processed_df[c] = processed_df[c].fillna(global_mean)
+
     return processed_df
 
 @st.cache_resource(show_spinner=False)
@@ -631,9 +645,32 @@ with tab4:
 
             # ── Sklearn / tree-model inference path ──────────────────────
             else:
-                feature_cols = [c for c in state_data.columns if c not in exclude_cols]
+                # Use exact feature_cols saved at training time if available
+                _meta_path = os.path.join('pkl_models', 'feature_metadata.json')
+                if os.path.exists(_meta_path):
+                    with open(_meta_path) as _fh:
+                        _meta = json.load(_fh)
+                    _trained_cols = _meta.get('feature_cols', [])
+                    _raw_target_models = _meta.get('raw_target_models', ['Ridge Baseline', 'Random Forest'])
+                    # Keep only cols that exist in state_data
+                    feature_cols = [c for c in _trained_cols if c in state_data.columns]
+                else:
+                    _raw_target_models = ['Ridge Baseline', 'Random Forest']
+                    feature_cols = [c for c in state_data.columns if c not in exclude_cols]
+
                 latest_features = state_data[feature_cols].tail(1)
-                pred_median = max(0.0, float(model_obj.predict(latest_features)[0]))
+                _model_name = model_choice  # the display name chosen in UI
+
+                # Ridge / RF: trained on raw target with StandardScaler — predict directly
+                _scaler_path = os.path.join('pkl_models', 'raw_target_scaler.pkl')
+                if any(m.lower() in _model_name.lower() for m in _raw_target_models) and os.path.exists(_scaler_path):
+                    _raw_scaler = joblib.load(_scaler_path)
+                    _scaled_feat = _raw_scaler.transform(latest_features)
+                    pred_median = max(0.0, float(model_obj.predict(_scaled_feat)[0]))
+                else:
+                    # Gradient boosting: log1p target — apply expm1 to recover original scale
+                    log_pred = float(model_obj.predict(latest_features)[0])
+                    pred_median = max(0.0, float(np.expm1(max(0.0, log_pred))))
 
             # Estimate residual uncertainty std
             hist_std = float(state_data['total_enrolments'].tail(30).std())
