@@ -1,3 +1,19 @@
-*.csv
-# *.pkl
-# models/*.pkl
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Jupyter & IDE
+.ipynb_checkpoints
+.vscode/
+.idea/
+
+# OS artifacts
+.DS_Store
+Thumbs.db

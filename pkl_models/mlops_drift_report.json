@@ -1,18 +1,42 @@
 {
-  "timestamp": "2026-08-22 21:20:57",
+  "timestamp": "2026-08-25 08:35:36",
   "overall_drift_status": "NO_DRIFT",
   "models_health": {
-    "baseline_ridge_model.pkl": {
+    "ensemble_meta.pkl": {
       "status": "HEALTHY",
-      "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
-    },
-    "best_model.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
+      "type": "<class 'dict'>"
     },
     "lightgbm_model.pkl": {
       "status": "HEALTHY",
       "type": "<class 'lightgbm.sklearn.LGBMRegressor'>"
+    },
+    "lstm_scaler.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.preprocessing._data.StandardScaler'>"
+    },
+    "modelA_ensemble_meta.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'dict'>"
+    },
+    "modelA_lgb.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'lightgbm.sklearn.LGBMRegressor'>"
+    },
+    "modelA_rf.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.ensemble._forest.RandomForestRegressor'>"
+    },
+    "modelA_ridge.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
+    },
+    "modelA_scaler.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.preprocessing._data.StandardScaler'>"
+    },
+    "modelA_xgb.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'xgboost.sklearn.XGBRegressor'>"
     },
     "random_forest_model.pkl": {
       "status": "HEALTHY",
@@ -22,6 +46,10 @@
       "status": "HEALTHY",
       "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
     },
+    "ridge_scaler.pkl": {
+      "status": "HEALTHY",
+      "type": "<class 'sklearn.preprocessing._data.StandardScaler'>"
+    },
     "xgboost_model.pkl": {
       "status": "HEALTHY",
       "type": "<class 'xgboost.sklearn.XGBRegressor'>"
@@ -29,9 +57,9 @@
   },
   "feature_drift_metrics": {
     "total_enrolments": {
-      "ks_statistic": 0.085,
-      "p_value": 0.2422,
-      "psi_score": 0.0644,
+      "ks_statistic": 0.0404,
+      "p_value": 0.0,
+      "psi_score": 0.0098,
       "status": "STABLE"
     },
     "demo_total": {
@@ -41,18 +69,6 @@
       "status": "STABLE"
     },
     "bio_total": {
-      "ks_statistic": 0.085,
-      "p_value": 0.2422,
-      "psi_score": 0.0644,
-      "status": "STABLE"
-    },
-    "rolling_mean_7": {
-      "ks_statistic": 0.085,
-      "p_value": 0.2422,
-      "psi_score": 0.0644,
-      "status": "STABLE"
-    },
-    "bio_to_enrol_ratio": {
       "ks_statistic": 0.085,
       "p_value": 0.2422,
       "psi_score": 0.0644,

@@ -54,22 +54,35 @@ Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge 
 
 ---
 
-## Machine Learning Models
+## Machine Learning & Deep Learning Benchmark Results
 
-| Model | Test R² | Test RMSE | Test MAE | Notes |
-|---|---|---|---|---|
-| **Ensemble** 🥇 | **0.3817** | 1,437 | 490 | Inverse-RMSE blend of all 4 base models |
-| Ridge Baseline | 0.3550 | 1,468 | 496 | Raw target + StandardScaler |
-| LightGBM | 0.2885 | 1,542 | 506 | log1p target |
-| XGBoost | 0.2753 | 1,556 | 507 | log1p target |
-| LSTM (PyTorch) | 0.1970 | 1,610 | 622 | PyTorch seq2one, log1p target |
-| Random Forest | 0.1879 | 1,647 | 594 | Raw target + StandardScaler |
+Models are evaluated using an **80/20 chronological time-series split** (training on historical dates and validating on unseen future dates).
 
-> **All 6 models (including Ensemble) generalise positively** on the temporal test split (Oct–Dec 2025). Key engineering: India 2025 holiday calendar features (is_holiday, days_to_holiday, holiday_proximity); 2021 census state population features; log1p target for gradient boosting; StandardScaler + raw target for Ridge/RF; inverse-RMSE ensemble weighting.
+### Model Suite A: Operational System Load (`total_system_load`)
+> **Primary Use Case:** Forecasting Aadhaar center traffic, biometric scanner throughput, and operator counter staffing for saturated/maintenance states (where updates account for >85% of traffic).
 
-**Top predictive features** (SHAP — LightGBM): `rolling_mean_30`, `lag_1`, `days_since_start`, `state_mean_enrol`, `holiday_proximity`, `lag_1_per_1000`
+| Model Architecture | Train $R^2$ | Train RMSE | Train MAE | Test $R^2$ | Test RMSE | Test MAE | Primary Operational Role |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|---|
+| **Ensemble A** *(Meta-Blend)* 🥇 | — | — | — | **0.7422** | **13,108** | **6,453** | **Primary Ops Routing** (Center Staffing & Servers) |
+| **LightGBM (A)** 🥈 | **0.9541** | 30,111 | 9,842 | **0.7333** | 13,334 | 6,481 | High-speed gradient boosting on rolling/lag features |
+| **Random Forest (A)** 🥉 | **0.8498** | 54,436 | 14,210 | **0.7152** | 13,778 | 6,956 | Bagged decision tree ensemble |
+| **XGBoost (A)** | **0.9476** | 32,163 | 10,120 | **0.7071** | 13,973 | 6,601 | Regularized gradient boosted decision trees |
+| **Ridge Baseline (A)** | -3.1426 | 285,927 | 78,340 | **0.0113** | 25,672 | 13,762 | Linear baseline for total workload |
 
-All model artifacts are pre-trained and committed to the `pkl_models/` directory, so the app loads instantly without re-training.
+---
+
+### Model Suite B & Deep Learning: New Enrolments (`total_enrolments`)
+> **Primary Use Case:** Forecasting new registrations and child enrolment backlogs for growth states (UP, Bihar, Assam, Meghalaya).
+
+| Model Architecture | Train $R^2$ | Train RMSE | Train MAE | Test $R^2$ | Test RMSE | Test MAE | Primary Operational Role |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|---|
+| **PyTorch LSTM + Attention** 🧠 | **0.1134** | 2,120 | 854 | **0.1649** | **1,939** | **912** | **Deep Sequence**: 14-day sliding context window |
+| **Ensemble B (Enrolments)** | — | — | — | **-0.0737** | 2,505 | 892 | Inverse-RMSE blended tree predictor |
+| **LightGBM (B)** | **0.9704** | 850 | 290 | -0.1405 | 2,582 | 908 | Tree baseline for new registrations |
+| **Random Forest (B)** | **0.4820** | 3,557 | 1,120 | -0.1405 | 2,582 | 908 | Balanced depth tree ensemble |
+| **XGBoost (B)** | **0.9724** | 822 | 275 | -0.1406 | 2,582 | 908 | Tree baseline with L2 shrinkage |
+
+> **Key Feature Engineering**: 79 temporal, holiday decay, lag, rolling statistical, population quintile, and system velocity features. Target variables are `log1p`-transformed to stabilize variance across states of vastly different populations. All trained weights and scalers are persisted in [`pkl_models/`](pkl_models/).
 
 ---
 
@@ -98,42 +111,37 @@ Open [http://localhost:8080](http://localhost:8080) in your browser.
 ```
 aadhar-hackathon1/
 │
-├── app.py                               # Streamlit app (5-tab dashboard)
+├── app.py                               # Streamlit Web App (Interactive intelligence dashboard)
+├── train_models.py                      # Unified ML & Deep Learning (Ridge, RF, XGB, LGBM, Stacking, LSTM)
+├── mlops_pipeline.py                    # Automated KS + PSI drift monitoring & model health audit
 │
-├── 01_Exploratory_Data_Analysis.ipynb   # Self-contained EDA notebook
-├── 02_Model_Training_and_Evaluation.ipynb # Self-contained model training notebook
-├── 03_LSTM_Time_Series_Forecasting.ipynb  # Self-contained LSTM PyTorch notebook
-│
-├── mlops_pipeline.py                    # Automated KS + PSI drift monitoring script
-│
-├── pkl_models/                          # All pre-trained model artifacts (Git-tracked)
-│   ├── best_model.pkl                   # LightGBM best model (auto-loaded)
+├── pkl_models/                          # Pre-trained model artifacts & metrics
+│   ├── best_model.pkl                   # LightGBM best model
 │   ├── lightgbm_model.pkl
 │   ├── xgboost_model.pkl
 │   ├── random_forest_model.pkl
 │   ├── ridge_baseline_model.pkl
-│   ├── baseline_ridge_model.pkl
+│   ├── ensemble_meta.pkl                # Stacking ensemble meta-learner
 │   ├── lstm_model.pt                    # PyTorch LSTM weights
+│   ├── lstm_scaler.pkl                  # Fitted LSTM feature scaler
+│   ├── lstm_feature_cols.json           # Sequence feature definitions
 │   ├── feature_metadata.json            # Feature names & engineering config
 │   ├── model_comparison.json            # Benchmark metrics
-│   ├── model_report.json                # Detailed model report
 │   └── mlops_drift_report.json          # KS + PSI drift audit results
 │
-├── api_data_aadhar_enrolment/           # Enrollment CSVs (~1M rows) [git-ignored]
-├── api_data_aadhar_demographic/         # Demographic CSVs (~2M rows) [git-ignored]
-├── api_data_aadhar_biometric/           # Biometric CSVs (~1.8M rows) [git-ignored]
+├── api_data_aadhar_enrolment/           # Enrollment CSV shards (~1M rows)
+├── api_data_aadhar_demographic/         # Demographic CSV shards (~2M rows)
+├── api_data_aadhar_biometric/           # Biometric CSV shards (~1.8M rows)
+│
+├── cleaned_aadhaar_data.csv             # Unified panel dataset
+├── cleaned_aadhaar_monthly_national.csv # Monthly national aggregations
+├── cleaned_aadhaar_summary_by_state.csv # State-level total enrollments
 │
 ├── Dockerfile                           # Production container (PORT 8080)
-├── .dockerignore
-├── .streamlit/config.toml               # Streamlit headless server config
-├── requirements.txt                     # Pinned Python dependencies
-│
+├── requirements.txt                     # Python dependencies
 ├── deploy_to_gcp.bat                    # One-click GCP Cloud Run deploy (Windows)
 ├── deploy_to_gcp.sh                     # One-click GCP Cloud Run deploy (Linux/macOS)
-│
-├── PROJECT_REPORT.md                    # Technical deep-dive & future roadmap
-├── .gitignore                           # Ignores raw CSVs only; .pkl files are tracked
-└── README.md
+└── PROJECT_REPORT.md                    # Technical deep-dive & architecture
 ```
 
 ---
@@ -191,15 +199,22 @@ Results are saved to `pkl_models/mlops_drift_report.json` and visualized in the 
 
 ---
 
-## Notebooks
+## Model Training & Automation
 
-All notebooks are **100% self-contained** — no external `.py` modules required.
+The entire data engineering, feature generation, model training, and artifact export pipeline is consolidated into [`train_models.py`](train_models.py):
 
-| Notebook | Description |
-|---|---|
-| [`01_Exploratory_Data_Analysis.ipynb`](01_Exploratory_Data_Analysis.ipynb) | Data loading, state normalization, EDA visualizations |
-| [`02_Model_Training_and_Evaluation.ipynb`](02_Model_Training_and_Evaluation.ipynb) | Feature engineering, Ridge/RF/XGBoost/LightGBM training, exports to `pkl_models/` |
-| [`03_LSTM_Time_Series_Forecasting.ipynb`](03_LSTM_Time_Series_Forecasting.ipynb) | PyTorch LSTM training for time-series forecasting, exports `lstm_model.pt` |
+```bash
+# Run full training pipeline (Tabular models + Stacking Ensemble + PyTorch LSTM)
+python train_models.py
+
+# Run tabular models only (fast mode)
+python train_models.py --skip-lstm
+```
+
+To run the automated MLOps drift audit and model health check:
+```bash
+python mlops_pipeline.py
+```
 
 ---
 

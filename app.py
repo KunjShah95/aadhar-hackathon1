@@ -1,927 +1,1055 @@
-import os
-import glob
-import json
-import joblib
+import os, glob, json, joblib
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from sklearn.ensemble import IsolationForest
 import streamlit as st
 
-# PyTorch LSTM support (optional — graceful fallback if torch not installed)
-try:
-    import torch
-    import torch.nn as nn
-
-    class AadhaarLSTM(nn.Module):
-        def __init__(self, input_dim, hidden_dim=64, num_layers=2, dropout=0.2):
-            super(AadhaarLSTM, self).__init__()
-            self.lstm = nn.LSTM(
-                input_size=input_dim,
-                hidden_size=hidden_dim,
-                num_layers=num_layers,
-                batch_first=True,
-                dropout=dropout if num_layers > 1 else 0.0
-            )
-            self.fc = nn.Sequential(
-                nn.Linear(hidden_dim, 32),
-                nn.ReLU(),
-                nn.Linear(32, 1)
-            )
-
-        def forward(self, x):
-            lstm_out, _ = self.lstm(x)
-            return self.fc(lstm_out[:, -1, :])
-
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-
-# -----------------------------------------------------------------------------
-# STREAMLIT PAGE CONFIGURATION & CUSTOM CSS STYLING
-# -----------------------------------------------------------------------------
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Aadhaar Analytics & Predictive Intelligence Portal",
-    page_icon="🪪",
-    layout="wide",
+    page_title="Aadhaar Intelligence Engine",
+    page_icon="🪪", layout="wide",
     initial_sidebar_state="expanded"
 )
 
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.3rem;
-        font-weight: 800;
-        background: linear-gradient(90deg, #1E88E5 0%, #43A047 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.2rem;
-    }
-    .sub-header {
-        font-size: 1.1rem;
-        color: #B0BEC5;
-        margin-bottom: 1.5rem;
-    }
-    .metric-card {
-        background-color: #1E222A;
-        border-radius: 10px;
-        padding: 15px 20px;
-        border-left: 4px solid #1E88E5;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-    }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #FFFFFF;
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #90A4AE;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
+  .main-header {
+    font-size:2.3rem; font-weight:800;
+    background:linear-gradient(90deg,#1E88E5 0%,#43A047 100%);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+    margin-bottom:0.2rem;
+  }
+  .sub-header { font-size:1.05rem; color:#B0BEC5; margin-bottom:1.2rem; }
+  .module-card {
+    background:#1E222A; border-radius:10px; padding:14px 18px;
+    border-left:4px solid; margin-bottom:12px;
+  }
+  .mod-ops   { border-color:#1E88E5; }
+  .mod-mig   { border-color:#43A047; }
+  .mod-anom  { border-color:#E53935; }
+  .badge { padding:2px 8px; border-radius:12px; font-size:.78rem; font-weight:700; }
+  .badge-growth { background:#1b5e20; color:#a5d6a7; }
+  .badge-maint  { background:#b71c1c; color:#ef9a9a; }
+  .metric-card {
+    background:#1E222A; border-radius:10px; padding:16px 20px;
+    text-align:center; border:1px solid #2d3748; margin-bottom:8px;
+  }
+  .metric-val { font-size:1.8rem; font-weight:800; color:#1E88E5; }
+  .metric-lbl { font-size:.85rem; color:#90A4AE; margin-top:4px; }
+  .alert-box {
+    background:#7f0000; border-radius:8px; padding:8px 12px;
+    margin:4px 0; font-size:.82rem; color:#ffcdd2;
+  }
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# GEOSPATIAL CENTROIDS DICTIONARY (INDIAN STATES & UTs)
-# -----------------------------------------------------------------------------
+# ── Constants ─────────────────────────────────────────────────────────────────
+STATE_POPULATION = {
+    "Andaman & Nicobar": 397_000, "Andhra Pradesh": 49_577_103,
+    "Arunachal Pradesh": 1_570_458, "Assam": 34_293_000, "Bihar": 121_243_000,
+    "Chandigarh": 1_158_000, "Chhattisgarh": 28_724_000,
+    "Dadra & Nagar Haveli and Daman & Diu": 615_000, "Delhi": 20_667_656,
+    "Goa": 1_586_250, "Gujarat": 66_750_000, "Haryana": 28_204_000,
+    "Himachal Pradesh": 7_503_000, "Jammu and Kashmir": 14_999_397,
+    "Jharkhand": 36_480_000, "Karnataka": 66_165_000, "Kerala": 35_125_000,
+    "Ladakh": 316_000, "Lakshadweep": 73_183, "Madhya Pradesh": 82_232_000,
+    "Maharashtra": 123_144_000, "Manipur": 3_091_545, "Meghalaya": 3_366_710,
+    "Mizoram": 1_239_244, "Nagaland": 2_157_059, "Odisha": 45_429_000,
+    "Puducherry": 1_413_542, "Punjab": 30_141_373, "Rajasthan": 79_502_477,
+    "Sikkim": 682_000, "Tamil Nadu": 77_841_000, "Telangana": 38_705_209,
+    "Tripura": 4_169_794, "Uttar Pradesh": 231_502_578,
+    "Uttarakhand": 11_250_858, "West Bengal": 100_896_618,
+}
+_MEDIAN_POP = int(np.median(list(STATE_POPULATION.values())))
+
 STATE_COORDINATES = {
     "Andaman & Nicobar": {"lat": 11.7401, "lon": 92.6586},
-    "Andhra Pradesh": {"lat": 15.9129, "lon": 79.7400},
+    "Andhra Pradesh":    {"lat": 15.9129, "lon": 79.7400},
     "Arunachal Pradesh": {"lat": 28.2180, "lon": 94.7278},
-    "Assam": {"lat": 26.2006, "lon": 92.9376},
-    "Bihar": {"lat": 25.0961, "lon": 85.3131},
-    "Chandigarh": {"lat": 30.7333, "lon": 76.7794},
-    "Chhattisgarh": {"lat": 21.2787, "lon": 81.8661},
+    "Assam":             {"lat": 26.2006, "lon": 92.9376},
+    "Bihar":             {"lat": 25.0961, "lon": 85.3131},
+    "Chandigarh":        {"lat": 30.7333, "lon": 76.7794},
+    "Chhattisgarh":      {"lat": 21.2787, "lon": 81.8661},
     "Dadra & Nagar Haveli and Daman & Diu": {"lat": 20.3974, "lon": 72.8328},
-    "Delhi": {"lat": 28.7041, "lon": 77.1025},
-    "Goa": {"lat": 15.2993, "lon": 74.1240},
-    "Gujarat": {"lat": 22.2587, "lon": 71.1924},
-    "Haryana": {"lat": 29.0588, "lon": 76.0856},
-    "Himachal Pradesh": {"lat": 31.1048, "lon": 77.1734},
+    "Delhi":             {"lat": 28.7041, "lon": 77.1025},
+    "Goa":               {"lat": 15.2993, "lon": 74.1240},
+    "Gujarat":           {"lat": 22.2587, "lon": 71.1924},
+    "Haryana":           {"lat": 29.0588, "lon": 76.0856},
+    "Himachal Pradesh":  {"lat": 31.1048, "lon": 77.1734},
     "Jammu and Kashmir": {"lat": 33.7782, "lon": 76.5762},
-    "Jharkhand": {"lat": 23.6102, "lon": 85.2799},
-    "Karnataka": {"lat": 15.3173, "lon": 75.7139},
-    "Kerala": {"lat": 10.8505, "lon": 76.2711},
-    "Ladakh": {"lat": 34.1526, "lon": 77.5771},
-    "Lakshadweep": {"lat": 10.5667, "lon": 72.6417},
-    "Madhya Pradesh": {"lat": 22.9734, "lon": 78.6569},
-    "Maharashtra": {"lat": 19.7515, "lon": 75.7139},
-    "Manipur": {"lat": 24.6637, "lon": 93.9063},
-    "Meghalaya": {"lat": 25.4670, "lon": 91.3662},
-    "Mizoram": {"lat": 23.1645, "lon": 92.9376},
-    "Nagaland": {"lat": 26.1584, "lon": 94.5624},
-    "Odisha": {"lat": 20.9517, "lon": 85.0985},
-    "Puducherry": {"lat": 11.9416, "lon": 79.8083},
-    "Punjab": {"lat": 31.1471, "lon": 75.3412},
-    "Rajasthan": {"lat": 27.0238, "lon": 74.2179},
-    "Sikkim": {"lat": 27.5330, "lon": 88.5122},
-    "Tamil Nadu": {"lat": 11.1271, "lon": 78.6569},
-    "Telangana": {"lat": 18.1124, "lon": 79.0193},
-    "Tripura": {"lat": 23.9408, "lon": 91.9882},
-    "Uttar Pradesh": {"lat": 26.8467, "lon": 80.9462},
-    "Uttarakhand": {"lat": 30.0668, "lon": 79.0193},
-    "West Bengal": {"lat": 22.9868, "lon": 87.8550}
+    "Jharkhand":         {"lat": 23.6102, "lon": 85.2799},
+    "Karnataka":         {"lat": 15.3173, "lon": 75.7139},
+    "Kerala":            {"lat": 10.8505, "lon": 76.2711},
+    "Ladakh":            {"lat": 34.1526, "lon": 77.5771},
+    "Lakshadweep":       {"lat": 10.5667, "lon": 72.6417},
+    "Madhya Pradesh":    {"lat": 22.9734, "lon": 78.6569},
+    "Maharashtra":       {"lat": 19.7515, "lon": 75.7139},
+    "Manipur":           {"lat": 24.6637, "lon": 93.9063},
+    "Meghalaya":         {"lat": 25.4670, "lon": 91.3662},
+    "Mizoram":           {"lat": 23.1645, "lon": 92.9376},
+    "Nagaland":          {"lat": 26.1584, "lon": 94.5624},
+    "Odisha":            {"lat": 20.9517, "lon": 85.0985},
+    "Puducherry":        {"lat": 11.9416, "lon": 79.8083},
+    "Punjab":            {"lat": 31.1471, "lon": 75.3412},
+    "Rajasthan":         {"lat": 27.0238, "lon": 74.2179},
+    "Sikkim":            {"lat": 27.5330, "lon": 88.5122},
+    "Tamil Nadu":        {"lat": 11.1271, "lon": 78.6569},
+    "Telangana":         {"lat": 18.1124, "lon": 79.0193},
+    "Tripura":           {"lat": 23.9408, "lon": 91.9882},
+    "Uttar Pradesh":     {"lat": 26.8467, "lon": 80.9462},
+    "Uttarakhand":       {"lat": 30.0668, "lon": 79.0193},
+    "West Bengal":       {"lat": 22.9868, "lon": 87.8550},
 }
-
-CANONICAL_STATES = list(STATE_COORDINATES.keys())
 
 STATE_ALIASES = {
     "andaman and nicobar islands": "Andaman & Nicobar",
     "andaman & nicobar islands": "Andaman & Nicobar",
     "a & n islands": "Andaman & Nicobar",
-    "andhra pradesh": "Andhra Pradesh",
-    "arunachal pradesh": "Arunachal Pradesh",
-    "assam": "Assam",
-    "bihar": "Bihar",
-    "chandigarh": "Chandigarh",
-    "chhattisgarh": "Chhattisgarh",
-    "chhatisgarh": "Chhattisgarh",
+    "andhra pradesh": "Andhra Pradesh", "arunachal pradesh": "Arunachal Pradesh",
+    "assam": "Assam", "bihar": "Bihar", "chandigarh": "Chandigarh",
+    "chhattisgarh": "Chhattisgarh", "chhatisgarh": "Chhattisgarh",
     "dadra and nagar haveli": "Dadra & Nagar Haveli and Daman & Diu",
     "daman and diu": "Dadra & Nagar Haveli and Daman & Diu",
     "dadra and nagar haveli and daman and diu": "Dadra & Nagar Haveli and Daman & Diu",
-    "delhi": "Delhi",
-    "nct of delhi": "Delhi",
-    "goa": "Goa",
-    "gujarat": "Gujarat",
-    "haryana": "Haryana",
-    "himachal pradesh": "Himachal Pradesh",
-    "jammu and kashmir": "Jammu and Kashmir",
-    "jammu & kashmir": "Jammu and Kashmir",
-    "jharkhand": "Jharkhand",
-    "karnataka": "Karnataka",
-    "kerala": "Kerala",
-    "ladakh": "Ladakh",
-    "lakshadweep": "Lakshadweep",
-    "madhya pradesh": "Madhya Pradesh",
-    "maharashtra": "Maharashtra",
-    "manipur": "Manipur",
-    "meghalaya": "Meghalaya",
-    "mizoram": "Mizoram",
-    "nagaland": "Nagaland",
-    "odisha": "Odisha",
-    "orissa": "Odisha",
-    "puducherry": "Puducherry",
-    "pondicherry": "Puducherry",
-    "punjab": "Punjab",
-    "rajasthan": "Rajasthan",
-    "sikkim": "Sikkim",
-    "tamil nadu": "Tamil Nadu",
-    "telangana": "Telangana",
-    "tripura": "Tripura",
-    "uttar pradesh": "Uttar Pradesh",
-    "uttarakhand": "Uttarakhand",
-    "uttaranchal": "Uttarakhand",
-    "west bengal": "West Bengal"
+    "dadra & nagar haveli": "Dadra & Nagar Haveli and Daman & Diu",
+    "daman & diu": "Dadra & Nagar Haveli and Daman & Diu",
+    "the dadra and nagar haveli and daman and diu": "Dadra & Nagar Haveli and Daman & Diu",
+    "delhi": "Delhi", "nct of delhi": "Delhi", "goa": "Goa", "gujarat": "Gujarat",
+    "haryana": "Haryana", "himachal pradesh": "Himachal Pradesh",
+    "jammu and kashmir": "Jammu and Kashmir", "jammu & kashmir": "Jammu and Kashmir",
+    "jharkhand": "Jharkhand", "karnataka": "Karnataka", "kerala": "Kerala",
+    "ladakh": "Ladakh", "lakshadweep": "Lakshadweep",
+    "madhya pradesh": "Madhya Pradesh", "maharashtra": "Maharashtra",
+    "manipur": "Manipur", "meghalaya": "Meghalaya", "mizoram": "Mizoram",
+    "nagaland": "Nagaland", "odisha": "Odisha", "orissa": "Odisha",
+    "puducherry": "Puducherry", "pondicherry": "Puducherry", "punjab": "Punjab",
+    "rajasthan": "Rajasthan", "sikkim": "Sikkim", "tamil nadu": "Tamil Nadu",
+    "telangana": "Telangana", "tripura": "Tripura", "uttar pradesh": "Uttar Pradesh",
+    "uttarakhand": "Uttarakhand", "uttaranchal": "Uttarakhand",
+    "west bengal": "West Bengal", "westbengal": "West Bengal",
+    "west  bengal": "West Bengal", "west bangal": "West Bengal",
 }
 
-def _normalize_state_name(val):
-    if pd.isna(val):
-        return np.nan
-    val_str = str(val).strip().lower()
-    return STATE_ALIASES.get(val_str, str(val).strip().title())
-
-@st.cache_data(show_spinner=False)
-def load_raw_data():
-    data_dir = "."
-    enrol_files = sorted(glob.glob(os.path.join(data_dir, 'api_data_aadhar_enrolment/**/*.csv'), recursive=True))
-    enrol_list = [pd.read_csv(f, dtype={'state': str, 'district': str}) for f in enrol_files]
-    enrol_df = pd.concat(enrol_list, ignore_index=True) if enrol_list else pd.DataFrame()
-        
-    if not enrol_df.empty:
-        enrol_df['date'] = pd.to_datetime(enrol_df['date'], format='%d-%m-%Y', errors='coerce')
-        enrol_df['norm_state'] = enrol_df['state'].apply(_normalize_state_name)
-        enrol_df['total_enrolments'] = enrol_df['age_0_5'].fillna(0) + enrol_df['age_5_17'].fillna(0) + enrol_df['age_18_greater'].fillna(0)
-        enrol_daily = enrol_df.groupby(['date', 'norm_state'])[['age_0_5', 'age_5_17', 'age_18_greater', 'total_enrolments']].sum().reset_index()
-    else:
-        enrol_daily = pd.DataFrame(columns=['date', 'norm_state', 'age_0_5', 'age_5_17', 'age_18_greater', 'total_enrolments'])
-
-    demo_files = sorted(glob.glob(os.path.join(data_dir, 'api_data_aadhar_demographic/**/*.csv'), recursive=True))
-    demo_list = [pd.read_csv(f, dtype={'state': str, 'district': str}) for f in demo_files]
-    if demo_list:
-        demo_df = pd.concat(demo_list, ignore_index=True)
-        demo_df['date'] = pd.to_datetime(demo_df['date'], format='%d-%m-%Y', errors='coerce')
-        demo_df['norm_state'] = demo_df['state'].apply(_normalize_state_name)
-        demo_df['demo_total'] = demo_df['demo_age_5_17'].fillna(0) + demo_df['demo_age_17_'].fillna(0)
-        demo_daily = demo_df.groupby(['date', 'norm_state'])[['demo_age_5_17', 'demo_age_17_', 'demo_total']].sum().reset_index()
-    else:
-        demo_daily = pd.DataFrame(columns=['date', 'norm_state', 'demo_age_5_17', 'demo_age_17_', 'demo_total'])
-
-    bio_files = sorted(glob.glob(os.path.join(data_dir, 'api_data_aadhar_biometric/**/*.csv'), recursive=True))
-    bio_list = [pd.read_csv(f, dtype={'state': str, 'district': str}) for f in bio_files]
-    if bio_list:
-        bio_df = pd.concat(bio_list, ignore_index=True)
-        bio_df['date'] = pd.to_datetime(bio_df['date'], format='%d-%m-%Y', errors='coerce')
-        bio_df['norm_state'] = bio_df['state'].apply(_normalize_state_name)
-        bio_df['bio_total'] = bio_df['bio_age_5_17'].fillna(0) + bio_df['bio_age_17_'].fillna(0)
-        bio_daily = bio_df.groupby(['date', 'norm_state'])[['bio_age_5_17', 'bio_age_17_', 'bio_total']].sum().reset_index()
-    else:
-        bio_daily = pd.DataFrame(columns=['date', 'norm_state', 'bio_age_5_17', 'bio_age_17_', 'bio_total'])
-
-    merged = pd.merge(enrol_daily, demo_daily, on=['date', 'norm_state'], how='outer')
-    merged = pd.merge(merged, bio_daily, on=['date', 'norm_state'], how='outer')
-    merged['total_enrolments'] = merged['total_enrolments'].fillna(0)
-    merged['demo_total'] = merged['demo_total'].fillna(0)
-    merged['bio_total'] = merged['bio_total'].fillna(0)
-
-    return merged
-
-@st.cache_data(show_spinner=False)
-def load_feature_data(df):
-    """Leak-free feature pipeline — column names match trained models exactly."""
-    df = df.copy()
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values(['norm_state', 'date']).reset_index(drop=True)
-
-    if df.empty or df['date'].dropna().empty:
-        return df
-
-    states    = df['norm_state'].dropna().unique()
-    all_dates = pd.date_range(df['date'].min(), df['date'].max(), freq='D')
-    grid = pd.MultiIndex.from_product([states, all_dates], names=['norm_state', 'date']).to_frame(index=False)
-    full_df = pd.merge(grid, df, on=['norm_state', 'date'], how='left')
-
-    for col in ['age_0_5', 'age_5_17', 'age_18_greater', 'total_enrolments',
-                'demo_age_5_17', 'demo_age_17_', 'demo_total',
-                'bio_age_5_17', 'bio_age_17_', 'bio_total']:
-        if col in full_df.columns:
-            full_df[col] = full_df[col].fillna(0)
-
-    # Calendar
-    full_df['day_of_week']      = full_df['date'].dt.dayofweek
-    full_df['day_of_month']     = full_df['date'].dt.day
-    full_df['month']            = full_df['date'].dt.month
-    full_df['quarter']          = full_df['date'].dt.quarter
-    full_df['day_of_year']      = full_df['date'].dt.dayofyear
-    full_df['is_weekend']       = full_df['day_of_week'].isin([5, 6]).astype(int)
-    full_df['days_since_start'] = (full_df['date'] - full_df['date'].min()).dt.days
-
-    # Cyclical (names match nb02/nb03)
-    full_df['sin_dow']   = np.sin(2 * np.pi * full_df['day_of_week'] / 7)
-    full_df['cos_dow']   = np.cos(2 * np.pi * full_df['day_of_week'] / 7)
-    full_df['sin_month'] = np.sin(2 * np.pi * full_df['month'] / 12)
-    full_df['cos_month'] = np.cos(2 * np.pi * full_df['month'] / 12)
-    full_df['state_cat'] = full_df['norm_state'].astype('category').cat.codes
-
-    # Population features
-    _STATE_POP = {
-        'Andaman & Nicobar': 397_000, 'Andhra Pradesh': 49_577_103,
-        'Arunachal Pradesh': 1_570_458, 'Assam': 34_293_000,
-        'Bihar': 121_243_000, 'Chandigarh': 1_158_000,
-        'Chhattisgarh': 28_724_000,
-        'Dadra & Nagar Haveli and Daman & Diu': 615_000,
-        'Delhi': 20_667_656, 'Goa': 1_586_250, 'Gujarat': 66_750_000,
-        'Haryana': 28_204_000, 'Himachal Pradesh': 7_503_000,
-        'Jammu and Kashmir': 14_999_397, 'Jharkhand': 36_480_000,
-        'Karnataka': 66_165_000, 'Kerala': 35_125_000,
-        'Ladakh': 316_000, 'Lakshadweep': 73_183,
-        'Madhya Pradesh': 82_232_000, 'Maharashtra': 123_144_000,
-        'Manipur': 3_091_545, 'Meghalaya': 3_366_710, 'Mizoram': 1_239_244,
-        'Nagaland': 2_157_059, 'Odisha': 45_429_000, 'Puducherry': 1_413_542,
-        'Punjab': 30_141_373, 'Rajasthan': 79_502_477, 'Sikkim': 682_000,
-        'Tamil Nadu': 77_841_000, 'Telangana': 38_705_209, 'Tripura': 4_169_794,
-        'Uttar Pradesh': 231_502_578, 'Uttarakhand': 11_250_858,
-        'West Bengal': 100_896_618,
-    }
-    _MEDIAN_POP = int(np.median(list(_STATE_POP.values())))
-    full_df['log_state_pop'] = np.log1p(
-        full_df['norm_state'].map(_STATE_POP).fillna(_MEDIAN_POP))
-
-    # Holiday features (India 2025)
-    _HOLIDAYS = pd.to_datetime([
-        '2025-03-14','2025-03-31','2025-04-06','2025-04-14','2025-04-18',
-        '2025-05-01','2025-06-06','2025-06-27','2025-07-06','2025-08-15',
-        '2025-08-16','2025-09-05','2025-10-02','2025-10-20','2025-10-21',
-        '2025-10-22','2025-11-05','2025-12-25',
-    ])
-    dates_arr = pd.to_datetime(full_df['date'])
-    full_df['is_holiday'] = dates_arr.isin(_HOLIDAYS).astype(int)
-    _days_to   = np.zeros(len(full_df), dtype=float)
-    _days_from = np.zeros(len(full_df), dtype=float)
-    for i, d in enumerate(dates_arr):
-        _f = _HOLIDAYS[_HOLIDAYS > d]; _p = _HOLIDAYS[_HOLIDAYS <= d]
-        _days_to[i]   = min((_f.min() - d).days, 30) if len(_f) > 0 else 30
-        _days_from[i] = min((d - _p.max()).days, 30) if len(_p) > 0 else 30
-    full_df['days_to_holiday']    = _days_to
-    full_df['days_since_holiday'] = _days_from
-    full_df['holiday_proximity']  = np.exp(-_days_to / 7)
-    full_df['holiday_recency']    = np.exp(-_days_from / 7)
-
-    feature_dfs = []
-    for state, group in full_df.groupby('norm_state'):
-        group = group.sort_values('date').copy()
-        pop = _STATE_POP.get(state, _MEDIAN_POP)
-        for lag in [1, 7, 14, 30]:
-            group[f'lag_{lag}']      = group['total_enrolments'].shift(lag)
-            group[f'bio_lag_{lag}']  = group['bio_total'].shift(lag)
-            group[f'demo_lag_{lag}'] = group['demo_total'].shift(lag)
-        for w in [7, 14, 30]:
-            s = group['total_enrolments'].shift(1)
-            group[f'rolling_mean_{w}'] = s.rolling(w, min_periods=1).mean()
-            group[f'rolling_std_{w}']  = s.rolling(w, min_periods=1).std().fillna(0)
-            group[f'bio_rolling_{w}']  = group['bio_total'].shift(1).rolling(w, min_periods=1).mean()
-            group[f'demo_rolling_{w}'] = group['demo_total'].shift(1).rolling(w, min_periods=1).mean()
-        group['bio_to_enrol_ratio']  = (group['bio_rolling_7']  / (group['rolling_mean_7'] + 1)).fillna(0)
-        group['demo_to_enrol_ratio'] = (group['demo_rolling_7'] / (group['rolling_mean_7'] + 1)).fillna(0)
-        group['lag_1_per_1000']          = group['lag_1']          / pop * 1000
-        group['rolling_mean_7_per_1000'] = group['rolling_mean_7'] / pop * 1000
-        feature_dfs.append(group)
-
-    processed_df = pd.concat(feature_dfs, ignore_index=True).fillna(0)
-
-    # Merge state-level scale features (computed on train, saved by nb02)
-    state_stats_path = os.path.join('pkl_models', 'state_stats.csv')
-    if os.path.exists(state_stats_path):
-        state_stats = pd.read_csv(state_stats_path)
-        processed_df = processed_df.merge(state_stats, on='norm_state', how='left')
-        global_mean = float(state_stats['state_mean_enrol'].mean())
-        for c in ['state_mean_enrol', 'state_std_enrol', 'state_median_enrol']:
-            if c in processed_df.columns:
-                processed_df[c] = processed_df[c].fillna(global_mean)
-
-    return processed_df
-
-@st.cache_resource(show_spinner=False)
-def load_saved_models():
-    pkl_dir = 'pkl_models'
-    models_dict = {}
-    if not os.path.exists(pkl_dir):
-        return models_dict
-
-    # Pkl files that are scalers/metadata — not loadable as standalone models
-    _SKIP_PKL = {
-        'lstm_scaler.pkl', 'raw_target_scaler.pkl', 'ridge_scaler.pkl',
-        'percapita_scaler.pkl', 'ridge_percapita_model.pkl',
-        'state_specific_ridge.pkl',
-    }
-    for f in glob.glob(os.path.join(pkl_dir, '*.pkl')):
-        basename = os.path.basename(f)
-        if basename in _SKIP_PKL:
-            continue
-        # ensemble_meta.pkl is a dict with weights, not a model
-        if basename == 'ensemble_meta.pkl':
-            try:
-                models_dict['Ensemble'] = joblib.load(f)
-            except Exception:
-                pass
-            continue
-        name = basename.replace('_model.pkl', '').replace('.pkl', '').replace('_', ' ').title()
-        try:
-            models_dict[name] = joblib.load(f)
-        except Exception:
-            pass
-
-    # Load PyTorch LSTM model
-    lstm_path  = os.path.join(pkl_dir, 'lstm_model.pt')
-    scaler_path = os.path.join(pkl_dir, 'lstm_scaler.pkl')
-    feat_path  = os.path.join(pkl_dir, 'lstm_feature_cols.json')
-    if TORCH_AVAILABLE and os.path.exists(lstm_path):
-        try:
-            # weights_only=False required for custom checkpoint dicts (PyTorch ≥2.6 safe)
-            checkpoint = torch.load(lstm_path, map_location='cpu', weights_only=False)
-            if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
-                state_dict = checkpoint['state_dict']
-                input_dim  = checkpoint.get('input_dim', 35)
-                hidden_dim = checkpoint.get('hidden_dim', 128)
-                num_layers = checkpoint.get('num_layers', 2)
-                lookback   = checkpoint.get('lookback', 14)
-            else:
-                # Legacy plain state_dict — infer dims from weight shapes
-                state_dict = checkpoint
-                key        = next(k for k in state_dict if 'weight_ih_l0' in k)
-                input_dim  = state_dict[key].shape[1]
-                hidden_dim = state_dict[key].shape[0] // 4  # 4 LSTM gates
-                num_layers = 2
-                lookback   = 14
-
-            lstm_model = AadhaarLSTM(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers)
-            lstm_model.load_state_dict(state_dict)
-            lstm_model.eval()
-
-            scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
-            with open(feat_path) as fh:
-                feat_cols = json.load(fh)
-            if not os.path.exists(feat_path):
-                feat_cols = None
-
-            models_dict['LSTM (PyTorch)'] = {
-                '_type': 'lstm',
-                'model': lstm_model,
-                'scaler': scaler,
-                'feature_cols': feat_cols,
-                'lookback': lookback,
-            }
-        except Exception as e:
-            st.warning(f"LSTM load error: {e}")
-
-    return models_dict
-
-# -----------------------------------------------------------------------------
-# MAIN APP HEADER & SIDEBAR
-# -----------------------------------------------------------------------------
-st.markdown('<div class="main-header">🪪 Aadhaar Analytics & Predictive Intelligence Portal</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Multi-Shard Time Series Forecasting, Geospatial Density Mapping & Anomaly Alert Engine</div>', unsafe_allow_html=True)
-
-with st.spinner("Loading Multi-Shard Data & Models..."):
-    panel_df = load_raw_data()
-    processed_df = load_feature_data(panel_df)
-    models_dict = load_saved_models()
-
-# Sidebar controls
-st.sidebar.title("🎛️ Navigation & Filters")
-selected_state = st.sidebar.selectbox("Filter State", ["All States"] + sorted([s for s in panel_df['norm_state'].dropna().unique()]))
-
-# Guard against empty dataset (no CSVs loaded) — pd.NaT has no .date()
-_date_col = panel_df['date'].dropna()
-if not _date_col.empty:
-    date_min = _date_col.min().date()
-    date_max = _date_col.max().date()
-    selected_dates = st.sidebar.date_input("Date Range", value=[date_min, date_max], min_value=date_min, max_value=date_max)
-    if len(selected_dates) == 2:
-        start_date, end_date = selected_dates
-        filtered_df = panel_df[(panel_df['date'].dt.date >= start_date) & (panel_df['date'].dt.date <= end_date)].copy()
-    else:
-        filtered_df = panel_df.copy()
-else:
-    st.sidebar.warning("No enrollment data found. Add CSVs to api_data_aadhar_enrolment/")
-    filtered_df = panel_df.copy()
-
-if selected_state != "All States":
-    filtered_df = filtered_df[filtered_df['norm_state'] == selected_state].copy()
-
-# -----------------------------------------------------------------------------
-# TABS INTERFACE
-# -----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Executive Dashboard",
-    "🗺️ Geospatial & EDA",
-    "🤖 ML Model Leaderboard",
-    "🔮 Live Forecast Predictor (Quantiles)",
-    "🚨 Anomaly Alert Engine"
+INDIA_HOLIDAYS_2025 = pd.to_datetime([
+    "2025-03-14","2025-03-31","2025-04-06","2025-04-14","2025-04-18",
+    "2025-05-01","2025-06-06","2025-06-27","2025-07-06","2025-08-15",
+    "2025-08-16","2025-09-05","2025-10-02","2025-10-20","2025-10-21",
+    "2025-10-22","2025-11-05","2025-12-25",
 ])
 
-# -----------------------------------------------------------------------------
-# TAB 1: EXECUTIVE DASHBOARD
-# -----------------------------------------------------------------------------
+def _norm(val):
+    """Strict state normalizer — no fallback, numeric guard."""
+    if pd.isna(val): return np.nan
+    s = str(val).strip()
+    try:
+        int(s); return np.nan
+    except ValueError:
+        pass
+    result = STATE_ALIASES.get(s.lower())
+    return result if result else np.nan
+
+# ── Data loaders ──────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def load_raw_data():
+    def _read(pattern):
+        files = sorted(glob.glob(os.path.join(".", pattern), recursive=True))
+        dfs = [pd.read_csv(f, dtype={"state": str, "district": str}) for f in files]
+        if not dfs: return pd.DataFrame()
+        df = pd.concat(dfs, ignore_index=True)
+        df["date"] = pd.to_datetime(df["date"], format="%d-%m-%Y", errors="coerce")
+        df["norm_state"] = df["state"].apply(_norm)
+        return df.dropna(subset=["norm_state"])
+
+    enrol = _read("api_data_aadhar_enrolment/**/*.csv")
+    if not enrol.empty:
+        enrol["total_enrolments"] = enrol[["age_0_5","age_5_17","age_18_greater"]].fillna(0).sum(axis=1)
+        enrol = enrol.groupby(["date","norm_state"])[
+            ["age_0_5","age_5_17","age_18_greater","total_enrolments"]].sum().reset_index()
+
+    demo = _read("api_data_aadhar_demographic/**/*.csv")
+    if not demo.empty:
+        demo["demo_total"] = demo[["demo_age_5_17","demo_age_17_"]].fillna(0).sum(axis=1)
+        demo = demo.groupby(["date","norm_state"])[
+            ["demo_age_5_17","demo_age_17_","demo_total"]].sum().reset_index()
+
+    bio = _read("api_data_aadhar_biometric/**/*.csv")
+    if not bio.empty:
+        bio["bio_total"] = bio[["bio_age_5_17","bio_age_17_"]].fillna(0).sum(axis=1)
+        bio = bio.groupby(["date","norm_state"])[
+            ["bio_age_5_17","bio_age_17_","bio_total"]].sum().reset_index()
+
+    m = pd.merge(enrol, demo, on=["date","norm_state"], how="outer") if not enrol.empty else demo
+    if not bio.empty: m = pd.merge(m, bio, on=["date","norm_state"], how="outer")
+    for c in ["total_enrolments","demo_total","bio_total"]:
+        if c in m.columns: m[c] = m[c].fillna(0)
+    return m
+
+@st.cache_data(show_spinner=False)
+def build_feature_panel(df):
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values(["norm_state","date"]).reset_index(drop=True)
+
+    states    = df["norm_state"].dropna().unique()
+    all_dates = pd.date_range(df["date"].min(), df["date"].max(), freq="D")
+    grid = pd.MultiIndex.from_product([states, all_dates], names=["norm_state","date"]).to_frame(index=False)
+    full = pd.merge(grid, df, on=["norm_state","date"], how="left")
+
+    for c in ["age_0_5","age_5_17","age_18_greater","total_enrolments",
+              "demo_age_5_17","demo_age_17_","demo_total","bio_age_5_17","bio_age_17_","bio_total"]:
+        if c in full.columns: full[c] = full[c].fillna(0)
+
+    full["total_system_load"] = full["total_enrolments"] + full["demo_total"] + full["bio_total"]
+    full["day_of_week"] = full["date"].dt.dayofweek
+    full["month"]       = full["date"].dt.month
+    full["is_weekend"]  = full["day_of_week"].isin([5,6]).astype(int)
+    full["sin_dow"]     = np.sin(2*np.pi*full["day_of_week"]/7)
+    full["cos_dow"]     = np.cos(2*np.pi*full["day_of_week"]/7)
+    full["sin_month"]   = np.sin(2*np.pi*full["month"]/12)
+    full["cos_month"]   = np.cos(2*np.pi*full["month"]/12)
+    full["log_state_pop"] = np.log1p(full["norm_state"].map(STATE_POPULATION).fillna(_MEDIAN_POP))
+
+    dates_arr = pd.to_datetime(full["date"])
+    full["is_holiday"] = dates_arr.isin(INDIA_HOLIDAYS_2025).astype(int)
+    days_to_next = np.zeros(len(full), dtype=float)
+    for i, d in enumerate(dates_arr):
+        fut = INDIA_HOLIDAYS_2025[INDIA_HOLIDAYS_2025 > d]
+        days_to_next[i] = min((fut.min() - d).days, 30) if len(fut) > 0 else 30
+    full["days_to_holiday"]   = days_to_next
+    full["holiday_proximity"] = np.exp(-days_to_next / 7)
+
+    dfs = []
+    for state, grp in full.groupby("norm_state"):
+        grp = grp.sort_values("date").copy()
+        pop = STATE_POPULATION.get(state, _MEDIAN_POP)
+        for lag in [1, 7]:
+            grp[f"lag_{lag}"]       = grp["total_enrolments"].shift(lag)
+            grp[f"bio_lag_{lag}"]   = grp["bio_total"].shift(lag)
+            grp[f"demo_lag_{lag}"]  = grp["demo_total"].shift(lag)
+            grp[f"load_lag_{lag}"]  = grp["total_system_load"].shift(lag)
+        s_enrol = grp["total_enrolments"].shift(1)
+        s_load  = grp["total_system_load"].shift(1)
+        grp["rolling_mean_7"]  = s_enrol.rolling(7,  min_periods=1).mean()
+        grp["rolling_mean_30"] = s_enrol.rolling(30, min_periods=1).mean()
+        grp["rolling_std_7"]   = s_enrol.rolling(7,  min_periods=1).std().fillna(0)
+        grp["load_rolling_7"]  = s_load.rolling(7,  min_periods=1).mean()
+        grp["load_rolling_30"] = s_load.rolling(30, min_periods=1).mean()
+        grp["bio_rolling_7"]   = grp["bio_total"].shift(1).rolling(7, min_periods=1).mean()
+        grp["demo_rolling_7"]  = grp["demo_total"].shift(1).rolling(7, min_periods=1).mean()
+        grp["bio_to_enrol_ratio"]  = (grp["bio_rolling_7"]  / (grp["rolling_mean_7"] + 1)).fillna(0)
+        grp["demo_to_enrol_ratio"] = (grp["demo_rolling_7"] / (grp["rolling_mean_7"] + 1)).fillna(0)
+        grp["lag_1_per_1000"]          = grp["lag_1"] / pop * 1000
+        grp["rolling_mean_7_per_1000"] = grp["rolling_mean_7"] / pop * 1000
+        s1 = grp["total_enrolments"].shift(1)
+        grp["ewm_7"]           = s1.ewm(span=7, min_periods=1).mean()
+        grp["ewm_trend"]       = ((grp["ewm_7"] - grp["rolling_mean_30"]) / (grp["rolling_mean_30"] + 1)).fillna(0)
+        grp["system_velocity"] = ((grp["bio_rolling_7"] + grp["demo_rolling_7"]) / (grp["rolling_mean_7"] + 1)).fillna(0)
+        grp["mom_growth"]      = ((grp["rolling_mean_7"] - grp["rolling_mean_30"]) / (grp["rolling_mean_30"] + 1)).fillna(0)
+        grp["lifecycle_stage"] = (grp["system_velocity"] > 5.0).astype(int)
+        dfs.append(grp)
+    return pd.concat(dfs, ignore_index=True).fillna(0)
+
+@st.cache_resource(show_spinner=False)
+def load_models():
+    pkl = "pkl_models"
+    out = {"model_A": None, "model_B": None, "meta": {}}
+    if not os.path.exists(pkl): return out
+
+    meta_path = os.path.join(pkl, "feature_metadata.json")
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            out["meta"] = json.load(f)
+
+    # Model B (enrolments)
+    try:
+        em_b = joblib.load(os.path.join(pkl, "ensemble_meta.pkl"))
+        sc_b = joblib.load(os.path.join(pkl, em_b.get("scaler", "ridge_scaler.pkl")))
+        base_b = {
+            "Ridge":         joblib.load(os.path.join(pkl, "ridge_baseline_model.pkl")),
+            "Random Forest": joblib.load(os.path.join(pkl, "random_forest_model.pkl")),
+            "XGBoost":       joblib.load(os.path.join(pkl, "xgboost_model.pkl")),
+            "LightGBM":      joblib.load(os.path.join(pkl, "lightgbm_model.pkl")),
+        }
+        out["model_B"] = {"ensemble_meta": em_b, "scaler": sc_b, "models": base_b}
+    except Exception as e:
+        st.warning(f"Model B load: {e}")
+
+    # Model A (system_load)
+    try:
+        em_a = joblib.load(os.path.join(pkl, "modelA_ensemble_meta.pkl"))
+        sc_a = joblib.load(os.path.join(pkl, em_a.get("scaler", "modelA_scaler.pkl")))
+        base_a = {
+            "Ridge":         joblib.load(os.path.join(pkl, "modelA_ridge.pkl")),
+            "Random Forest": joblib.load(os.path.join(pkl, "modelA_rf.pkl")),
+            "XGBoost":       joblib.load(os.path.join(pkl, "modelA_xgb.pkl")),
+            "LightGBM":      joblib.load(os.path.join(pkl, "modelA_lgb.pkl")),
+        }
+        out["model_A"] = {"ensemble_meta": em_a, "scaler": sc_a, "models": base_a}
+    except Exception as e:
+        st.warning(f"Model A load: {e}")
+
+    return out
+
+def _ensemble_predict(mdl_dict, feature_row_df):
+    em   = mdl_dict["ensemble_meta"]
+    sc   = mdl_dict["scaler"]
+    wts  = em["weights"]
+    fcols = em["feature_cols"]
+    avail = [c for c in fcols if c in feature_row_df.columns]
+    Xs   = sc.transform(feature_row_df[avail])
+    pred = 0.0
+    for mn, mp in mdl_dict["models"].items():
+        key = mn.split()[0]
+        if "Random" in mn: key = "RF"
+        if key not in wts: continue
+        pred += wts[key] * max(0.0, float(mp.predict(Xs)[0]))
+    return max(0.0, pred)
+
+def _single_model_predict(mdl_dict, model_name, feature_row_df):
+    """Predict with one specific sub-model."""
+    sc    = mdl_dict["scaler"]
+    em    = mdl_dict["ensemble_meta"]
+    fcols = em["feature_cols"]
+    avail = [c for c in fcols if c in feature_row_df.columns]
+    Xs    = sc.transform(feature_row_df[avail])
+    mp    = mdl_dict["models"].get(model_name)
+    if mp is None: return None
+    return max(0.0, float(mp.predict(Xs)[0]))
+
+# ── Load everything ───────────────────────────────────────────────────────────
+st.markdown('<div class="main-header">🪪 Aadhaar Intelligence Engine</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">36 States · Two-Model Routing · Operations · Migration · Fraud Prevention</div>', unsafe_allow_html=True)
+
+with st.spinner("Loading data & models…"):
+    panel_df   = load_raw_data()
+    feature_df = build_feature_panel(panel_df)
+    mdls       = load_models()
+
+# ── Lifecycle classification ──────────────────────────────────────────────────
+_lc_df = panel_df.groupby("norm_state").agg(
+    te=("total_enrolments","sum"), dt=("demo_total","sum"), bt=("bio_total","sum")).reset_index()
+_lc_df["ratio"] = (_lc_df["dt"] + _lc_df["bt"]) / (_lc_df["te"] + 1)
+_lc_df["stage"] = _lc_df["ratio"].apply(lambda r: "Growth" if r <= 5 else "Maintenance")
+growth_states = set(_lc_df[_lc_df["stage"] == "Growth"]["norm_state"])
+
+# ── Predicted loads for sidebar alerts ───────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def _compute_predicted_loads(_feature_df, _mdls):
+    """Predict system load for all states on last date — used for 90th-pct alerts."""
+    if _mdls["model_A"] is None: return {}
+    last_date = _feature_df["date"].max()
+    last_feat = _feature_df[_feature_df["date"] == last_date]
+    preds = {}
+    for _, row in last_feat.iterrows():
+        try:
+            p = _ensemble_predict(_mdls["model_A"], pd.DataFrame([row]))
+            preds[row["norm_state"]] = p
+        except Exception:
+            pass
+    return preds
+
+pred_loads = _compute_predicted_loads(feature_df, mdls)
+_thresh_90 = np.percentile(list(pred_loads.values()), 90) if pred_loads else 0
+_alert_states = [s for s, v in pred_loads.items() if v >= _thresh_90]
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+st.sidebar.title("🎛️ Navigation & Filters")
+_states = sorted(panel_df["norm_state"].dropna().unique())
+selected_state = st.sidebar.selectbox("Filter State", ["All States"] + _states)
+
+_date_col = panel_df["date"].dropna()
+if not _date_col.empty:
+    d_min, d_max = _date_col.min().date(), _date_col.max().date()
+    sel_dates = st.sidebar.date_input("Date Range", [d_min, d_max], min_value=d_min, max_value=d_max)
+    s_date, e_date = (sel_dates[0], sel_dates[1]) if len(sel_dates) == 2 else (d_min, d_max)
+    filt = panel_df[(panel_df["date"].dt.date >= s_date) & (panel_df["date"].dt.date <= e_date)].copy()
+else:
+    st.sidebar.warning("No data found.")
+    filt = panel_df.copy()
+
+if selected_state != "All States":
+    filt = filt[filt["norm_state"] == selected_state].copy()
+
+# 90th-percentile workload alerts in sidebar
+if _alert_states:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ⚠️ High-Load Alerts (>90th pct)")
+    for s in _alert_states[:5]:
+        v = pred_loads.get(s, 0)
+        st.sidebar.markdown(
+            f'<div class="alert-box">⚠️ <b>{s}</b><br>Pred Load: {int(v):,}</div>',
+            unsafe_allow_html=True
+        )
+    if len(_alert_states) > 5:
+        st.sidebar.markdown(f"*+{len(_alert_states)-5} more states above threshold*")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"**Data:** {len(panel_df):,} rows · {panel_df['norm_state'].nunique()} states")
+st.sidebar.markdown(f"**Threshold:** {int(_thresh_90):,} system load units")
+
+# ── TABS ──────────────────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "📊 Executive Dashboard",
+    "🗺️ Geo Heatmap",
+    "🚶 Migration Intelligence",
+    "🤖 Model Leaderboard",
+    "🔮 7-Day Forecast",
+    "🚨 Anomaly Engine",
+    "🧠 Intelligence Engine",
+])
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 1: Executive Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
 with tab1:
     st.subheader("📌 Key Activity Metrics")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Enrolments", f"{int(filtered_df['total_enrolments'].sum()):,}")
-    with col2:
-        st.metric("Demographic Updates", f"{int(filtered_df['demo_total'].sum()):,}")
-    with col3:
-        st.metric("Biometric Updates", f"{int(filtered_df['bio_total'].sum()):,}")
-    with col4:
-        st.metric("Canonical States Covered", f"{filtered_df['norm_state'].nunique()}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Enrolments",    f"{int(filt['total_enrolments'].sum()):,}")
+    c2.metric("Demographic Updates", f"{int(filt['demo_total'].sum()):,}")
+    c3.metric("Biometric Updates",   f"{int(filt['bio_total'].sum()):,}")
+    c4.metric("States Covered",      f"{filt['norm_state'].nunique()}")
 
-    st.markdown("---")
-    
-    # Export filtered summary CSV button
-    st.download_button(
-        label="📥 Download Executive Summary CSV",
-        data=filtered_df.to_csv(index=False).encode('utf-8'),
-        file_name="aadhaar_executive_summary.csv",
-        mime="text/csv"
-    )
+    # System velocity (avg update-to-enrolment ratio)
+    _te = filt["total_enrolments"].sum()
+    _up = filt["demo_total"].sum() + filt["bio_total"].sum()
+    _sv = _up / (_te + 1)
+    c1b, c2b, c3b = st.columns(3)
+    c1b.metric("System Velocity (Updates÷Enrolments)", f"{_sv:,.1f}x", help=">5x → Maintenance phase")
+    c2b.metric("Growth States", f"{len(growth_states)}", delta=f"of {panel_df['norm_state'].nunique()}")
+    c3b.metric("Maintenance States", f"{panel_df['norm_state'].nunique() - len(growth_states)}", delta="Aadhaar saturated")
 
-    # Daily trend line plot
-    st.subheader("📈 National Daily Time Series (Enrolments vs Updates)")
-    daily_trend = filtered_df.groupby('date')[['total_enrolments', 'demo_total', 'bio_total']].sum().reset_index()
-    
-    fig_trend = go.Figure()
-    fig_trend.add_trace(go.Scatter(x=daily_trend['date'], y=daily_trend['total_enrolments'], name='Enrolments', line=dict(color='#1f77b4', width=2)))
-    fig_trend.add_trace(go.Scatter(x=daily_trend['date'], y=daily_trend['demo_total'], name='Demographic Updates', line=dict(color='#ff7f0e', width=2)))
-    fig_trend.add_trace(go.Scatter(x=daily_trend['date'], y=daily_trend['bio_total'], name='Biometric Updates', line=dict(color='#2ca02c', width=2)))
-    
-    fig_trend.update_layout(
-        template='plotly_dark',
-        xaxis_title='Date',
-        yaxis_title='Volume',
-        hovermode='x unified',
-        height=450
-    )
-    st.plotly_chart(fig_trend, use_container_width=True)
+    st.download_button("📥 Export Summary CSV",
+        filt.to_csv(index=False).encode(), "aadhaar_summary.csv", "text/csv")
 
-    # Top States Bar Chart & Age Distribution
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("🗺️ Top 10 States by Enrolments")
-        top_states = filtered_df.groupby('norm_state')['total_enrolments'].sum().reset_index().sort_values('total_enrolments', ascending=False).head(10)
-        fig_states = px.bar(
-            top_states,
-            x='total_enrolments',
-            y='norm_state',
-            orientation='h',
-            color='total_enrolments',
-            color_continuous_scale='Viridis',
-            template='plotly_dark'
-        )
-        fig_states.update_layout(yaxis={'categoryorder': 'total ascending'}, height=400)
-        st.plotly_chart(fig_states, use_container_width=True)
-        
-    with c2:
-        st.subheader("👶 Age Demographics Share")
+    daily = filt.groupby("date")[["total_enrolments","demo_total","bio_total"]].sum().reset_index()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=daily["date"], y=daily["total_enrolments"], name="Enrolments",   line=dict(color="#1f77b4", width=2)))
+    fig.add_trace(go.Scatter(x=daily["date"], y=daily["demo_total"],       name="Demo Updates", line=dict(color="#ff7f0e", width=2)))
+    fig.add_trace(go.Scatter(x=daily["date"], y=daily["bio_total"],        name="Bio Updates",  line=dict(color="#2ca02c", width=2)))
+    fig.update_layout(template="plotly_dark", height=420, hovermode="x unified",
+                      xaxis_title="Date", yaxis_title="Volume",
+                      title="National Daily Activity (Enrolments vs Updates)")
+    st.plotly_chart(fig, use_container_width=True)
+
+    a, b = st.columns(2)
+    with a:
+        top10 = filt.groupby("norm_state")["total_enrolments"].sum().reset_index().sort_values("total_enrolments", ascending=False).head(10)
+        fig2  = px.bar(top10, x="total_enrolments", y="norm_state", orientation="h",
+                       color="total_enrolments", color_continuous_scale="Viridis", template="plotly_dark",
+                       title="Top 10 States by Enrolments")
+        fig2.update_layout(yaxis={"categoryorder":"total ascending"}, height=380)
+        st.plotly_chart(fig2, use_container_width=True)
+    with b:
         age_sums = {
-            'Age 0-5': filtered_df['age_0_5'].sum() if 'age_0_5' in filtered_df else 0,
-            'Age 5-17': filtered_df['age_5_17'].sum() if 'age_5_17' in filtered_df else 0,
-            'Age 18+': filtered_df['age_18_greater'].sum() if 'age_18_greater' in filtered_df else 0
+            "Age 0–5":  filt.get("age_0_5",  pd.Series([0])).sum(),
+            "Age 5–17": filt.get("age_5_17", pd.Series([0])).sum(),
+            "Age 18+":  filt.get("age_18_greater", pd.Series([0])).sum(),
         }
-        fig_pie = px.pie(
-            names=list(age_sums.keys()),
-            values=list(age_sums.values()),
-            hole=0.4,
-            template='plotly_dark',
-            color_discrete_sequence=px.colors.qualitative.Pastel
-        )
-        fig_pie.update_layout(height=400)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        fig3 = px.pie(names=list(age_sums), values=list(age_sums.values()),
+                      hole=0.4, template="plotly_dark", title="Age Group Share",
+                      color_discrete_sequence=px.colors.qualitative.Pastel)
+        fig3.update_layout(height=380)
+        st.plotly_chart(fig3, use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# TAB 2: GEOSPATIAL & EXPLORATORY ANALYSIS
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 2: Geo Heatmap (Scattermapbox)
+# ─────────────────────────────────────────────────────────────────────────────
 with tab2:
-    st.subheader("🗺️ Geospatial State Geographic Density Map")
-    
-    # Construct state centroid data for Geo Map
-    state_geo_df = filtered_df.groupby('norm_state')[['total_enrolments', 'demo_total', 'bio_total']].sum().reset_index()
-    state_geo_df['lat'] = state_geo_df['norm_state'].map(lambda s: STATE_COORDINATES.get(s, {}).get('lat', np.nan))
-    state_geo_df['lon'] = state_geo_df['norm_state'].map(lambda s: STATE_COORDINATES.get(s, {}).get('lon', np.nan))
-    state_geo_df = state_geo_df.dropna(subset=['lat', 'lon'])
-    
-    fig_map = px.scatter_geo(
-        state_geo_df,
-        lat='lat',
-        lon='lon',
-        hover_name='norm_state',
-        size='total_enrolments',
-        color='total_enrolments',
-        color_continuous_scale='Magma',
-        projection='natural earth',
-        title='National Aadhaar Enrolment Density by State Centroid Coordinates',
-        template='plotly_dark',
-        size_max=40
+    st.subheader("🗺️ Live Geo Intelligence — State Workload Heatmap")
+
+    geo_metric = st.radio("Map metric", ["System Load (Forecast)", "Total Enrolments", "Bio+Demo Updates"],
+                          horizontal=True)
+
+    sgeo = filt.groupby("norm_state").agg(
+        total_enrolments=("total_enrolments","sum"),
+        demo_total=("demo_total","sum"),
+        bio_total=("bio_total","sum"),
+    ).reset_index()
+    sgeo["update_total"]  = sgeo["demo_total"] + sgeo["bio_total"]
+    sgeo["system_load"]   = sgeo["total_enrolments"] + sgeo["update_total"]
+    sgeo["predicted_load"] = sgeo["norm_state"].map(pred_loads).fillna(sgeo["system_load"])
+    sgeo["lifecycle"]     = sgeo["norm_state"].apply(lambda s: "Growth" if s in growth_states else "Maintenance")
+    sgeo["lat"] = sgeo["norm_state"].map(lambda s: STATE_COORDINATES.get(s, {}).get("lat", np.nan))
+    sgeo["lon"] = sgeo["norm_state"].map(lambda s: STATE_COORDINATES.get(s, {}).get("lon", np.nan))
+    sgeo = sgeo.dropna(subset=["lat","lon"])
+
+    size_col = {"System Load (Forecast)": "predicted_load",
+                "Total Enrolments": "total_enrolments",
+                "Bio+Demo Updates": "update_total"}[geo_metric]
+    sgeo["bubble_size"] = np.log1p(sgeo[size_col]) * 5
+
+    color_map = {"Growth": "#2ca02c", "Maintenance": "#d62728"}
+
+    fig_map = px.scatter_mapbox(
+        sgeo, lat="lat", lon="lon",
+        hover_name="norm_state",
+        hover_data={"total_enrolments": True, "update_total": True,
+                    "predicted_load": True, "lifecycle": True, "lat": False, "lon": False},
+        size="bubble_size", size_max=50,
+        color="lifecycle",
+        color_discrete_map=color_map,
+        mapbox_style="carto-darkmatter",
+        zoom=3.8, center={"lat": 22.5, "lon": 82.0},
+        title=f"Aadhaar State Intelligence Map — {geo_metric}",
+        height=580,
     )
-    fig_map.update_geos(fitbounds="locations", visible=True)
-    fig_map.update_layout(height=500)
+    fig_map.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=40, b=0))
     st.plotly_chart(fig_map, use_container_width=True)
-    
-    st.markdown("---")
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("🗓️ Day of Week Seasonality")
-        season_df = filtered_df.copy()
-        season_df['day_name'] = season_df['date'].dt.day_name()
-        days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        fig_box = px.box(
-            season_df,
-            x='day_name',
-            y='total_enrolments',
-            category_orders={'day_name': days_order},
-            color='day_name',
-            template='plotly_dark',
-            title='Daily Enrolment Volume Distribution by Day'
-        )
-        fig_box.update_layout(height=420)
+
+    leg_a, leg_b = st.columns(2)
+    leg_a.markdown("🟢 **Growth** — active new registrations (Model B routing)")
+    leg_b.markdown("🔴 **Maintenance** — Aadhaar saturation, update load dominates (Model A routing)")
+
+    # Enrolment by day-of-week + correlation
+    a, b = st.columns(2)
+    with a:
+        sdf = filt.copy()
+        sdf["day_name"] = sdf["date"].dt.day_name()
+        day_order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+        fig_box = px.box(sdf, x="day_name", y="total_enrolments", category_orders={"day_name": day_order},
+                         color="day_name", template="plotly_dark", title="Enrolment by Day of Week")
+        fig_box.update_layout(height=380, showlegend=False)
         st.plotly_chart(fig_box, use_container_width=True)
-        
-    with col_b:
-        st.subheader("🔗 Feature Correlation Heatmap")
-        corr_cols = ['total_enrolments', 'demo_total', 'bio_total']
-        if 'age_0_5' in filtered_df:
-            corr_cols.extend(['age_0_5', 'age_5_17', 'age_18_greater'])
-        corr_matrix = filtered_df[corr_cols].corr()
-        fig_corr = px.imshow(
-            corr_matrix,
-            text_auto=".2f",
-            color_continuous_scale='Blues',
-            template='plotly_dark',
-            title='Cross-Shard Correlation Matrix'
-        )
-        fig_corr.update_layout(height=420)
-        st.plotly_chart(fig_corr, use_container_width=True)
+    with b:
+        corr = filt[["total_enrolments","demo_total","bio_total"]].corr()
+        fig_c = px.imshow(corr, text_auto=".2f", color_continuous_scale="Blues",
+                          template="plotly_dark", title="Cross-Shard Correlation")
+        fig_c.update_layout(height=380)
+        st.plotly_chart(fig_c, use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# TAB 3: MODEL LEADERBOARD
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 3: Migration Intelligence
+# ─────────────────────────────────────────────────────────────────────────────
 with tab3:
-    st.subheader("🤖 Machine Learning Model Benchmarks & Comparison")
-    
-    comp_file = os.path.join('pkl_models', 'model_comparison.json')
-    if os.path.exists(comp_file):
-        with open(comp_file, 'r') as f:
-            comp_data = json.load(f)
-        
-        comp_df = pd.DataFrame(comp_data).sort_values('test_r2', ascending=False, na_position='last')
-        # Only highlight columns that have at least one non-NaN value (avoids Styler crash)
-        _r2_has_data  = comp_df['test_r2'].notna().any()
-        _err_has_data = comp_df['test_rmse'].notna().any() and comp_df['test_mae'].notna().any()
-        styled = comp_df.style
-        if _r2_has_data:
-            styled = styled.highlight_max(axis=0, subset=['test_r2'], color='#2e7d32')
-        if _err_has_data:
-            styled = styled.highlight_min(axis=0, subset=['test_rmse', 'test_mae'], color='#2e7d32')
-        st.dataframe(styled, use_container_width=True)
-        
-        # Download Benchmark CSV button
-        st.download_button(
-            label="📥 Download Model Comparison Leaderboard CSV",
-            data=comp_df.to_csv(index=False).encode('utf-8'),
-            file_name="aadhaar_model_leaderboard.csv",
-            mime="text/csv"
-        )
-        
-        st.subheader("📊 Test R² Score Leaderboard Comparison")
-        fig_comp = px.bar(
-            comp_df,
-            x='model',
-            y='test_r2',
-            color='test_r2',
-            color_continuous_scale='Greens',
-            template='plotly_dark',
-            title='Test R² Score across Regressors'
-        )
-        fig_comp.update_layout(height=400)
-        st.plotly_chart(fig_comp, use_container_width=True)
-    else:
-        st.info("Model comparison json not found. Run training in notebook 02 to populate benchmarks.")
+    st.subheader("🚶 Migration Intelligence — Demographic Update Patterns")
+    st.markdown("""
+    **Demographic updates** (address changes, name corrections) serve as a **proxy for migration activity**.
+    High `demo_total` in a state signals residents relocating there — creating Aadhaar update demand.
+    """)
 
-    # ── SHAP Feature Importance ───────────────────────────────────────────────
+    # Top metric cards
+    m1, m2, m3 = st.columns(3)
+    state_demo = panel_df.groupby("norm_state")["demo_total"].sum().reset_index()
+    top_hub    = state_demo.sort_values("demo_total", ascending=False).iloc[0]
+    daily_inflow = panel_df.groupby("date")["demo_total"].sum()
+    latest_inflow = daily_inflow.iloc[-1] if not daily_inflow.empty else 0
+    total_updates = panel_df["demo_total"].sum()
+
+    m1.markdown(f"""<div class="metric-card">
+        <div class="metric-val">{int(latest_inflow):,}</div>
+        <div class="metric-lbl">Daily Demo Updates (Latest)</div>
+    </div>""", unsafe_allow_html=True)
+    m2.markdown(f"""<div class="metric-card">
+        <div class="metric-val">{top_hub['norm_state']}</div>
+        <div class="metric-lbl">Top Migration Hub</div>
+    </div>""", unsafe_allow_html=True)
+    m3.markdown(f"""<div class="metric-card">
+        <div class="metric-val">{int(top_hub['demo_total']):,}</div>
+        <div class="metric-lbl">Updates in Top Hub (Period)</div>
+    </div>""", unsafe_allow_html=True)
+
     st.markdown("---")
-    st.subheader("🔍 SHAP Feature Importance (LightGBM)")
-    _lgbm_path = os.path.join('pkl_models', 'lightgbm_model.pkl')
-    _meta_path  = os.path.join('pkl_models', 'feature_metadata.json')
-    if os.path.exists(_lgbm_path) and os.path.exists(_meta_path):
+
+    # State selector for trend
+    mig_state = st.selectbox("Select state for migration trend", _states, key="mig_state")
+    state_mig  = panel_df[panel_df["norm_state"] == mig_state].groupby("date")[["demo_total","bio_total","total_enrolments"]].sum().reset_index()
+
+    fig_area = go.Figure()
+    fig_area.add_trace(go.Scatter(
+        x=state_mig["date"], y=state_mig["demo_total"],
+        name="Demographic Updates", fill="tozeroy",
+        line=dict(color="#43A047", width=2), fillcolor="rgba(67,160,71,0.25)"
+    ))
+    fig_area.add_trace(go.Scatter(
+        x=state_mig["date"], y=state_mig["bio_total"],
+        name="Biometric Updates", fill="tozeroy",
+        line=dict(color="#1E88E5", width=2), fillcolor="rgba(30,136,229,0.20)"
+    ))
+    fig_area.add_trace(go.Scatter(
+        x=state_mig["date"], y=state_mig["total_enrolments"],
+        name="New Enrolments", line=dict(color="#FDD835", width=2, dash="dot")
+    ))
+    fig_area.update_layout(
+        template="plotly_dark", height=400, hovermode="x unified",
+        title=f"Migration Proxy Trend — {mig_state}",
+        xaxis_title="Date", yaxis_title="Volume"
+    )
+    st.plotly_chart(fig_area, use_container_width=True)
+
+    st.markdown("---")
+
+    # Top 5 migration corridors (states with highest demo velocity = updates/enrolments)
+    st.subheader("📍 Top Migration Corridors (Update Velocity Ranking)")
+    mig_df = panel_df.groupby("norm_state").agg(
+        demo=("demo_total","sum"), bio=("bio_total","sum"), enrol=("total_enrolments","sum")
+    ).reset_index()
+    mig_df["update_velocity"] = (mig_df["demo"] + mig_df["bio"]) / (mig_df["enrol"] + 1)
+    mig_df["lifecycle"] = mig_df["norm_state"].apply(lambda s: "Growth" if s in growth_states else "Maintenance")
+    mig_df = mig_df.sort_values("update_velocity", ascending=False)
+
+    fig_mig = px.bar(mig_df, x="update_velocity", y="norm_state", orientation="h",
+                     color="lifecycle", color_discrete_map={"Growth":"#2ca02c","Maintenance":"#d62728"},
+                     template="plotly_dark", height=600,
+                     title="State Migration Pressure (Update-to-Enrolment Velocity)",
+                     labels={"update_velocity":"Update Velocity (ratio)","norm_state":"State"})
+    fig_mig.update_layout(yaxis={"categoryorder":"total ascending"})
+    st.plotly_chart(fig_mig, use_container_width=True)
+
+    # Monthly migration heatmap
+    st.subheader("📅 Monthly Demo Update Heatmap (Top 15 States)")
+    top15_states = mig_df.head(15)["norm_state"].tolist()
+    heat_df = panel_df[panel_df["norm_state"].isin(top15_states)].copy()
+    heat_df["month_str"] = heat_df["date"].dt.to_period("M").astype(str)
+    pivot = heat_df.groupby(["norm_state","month_str"])["demo_total"].sum().unstack(fill_value=0)
+    fig_heat = px.imshow(
+        pivot, color_continuous_scale="Greens",
+        template="plotly_dark", height=480,
+        title="Monthly Demographic Update Volume (Migration Proxy)",
+        labels={"x":"Month","y":"State","color":"Demo Updates"}
+    )
+    st.plotly_chart(fig_heat, use_container_width=True)
+
+    # Policy alert table
+    st.subheader("📋 Policy Alert: States Needing Awareness Campaigns")
+    alert_df = mig_df[mig_df["lifecycle"] == "Growth"][["norm_state","enrol","demo","update_velocity"]].copy()
+    alert_df.columns = ["State","Total Enrolments","Demo Updates","Update Velocity"]
+    alert_df["Recommended Action"] = alert_df["Update Velocity"].apply(
+        lambda v: "🔴 Deploy Mobile Camp" if v < 1 else ("🟡 Awareness Drive" if v < 3 else "🟢 Monitor")
+    )
+    st.dataframe(alert_df.reset_index(drop=True), use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 4: Model Leaderboard
+# ─────────────────────────────────────────────────────────────────────────────
+with tab4:
+    st.subheader("🤖 ML Model Benchmarks — Two-Model Strategy")
+
+    st.markdown("""
+    | Model | Target | Routing | R² |
+    |-------|--------|---------|-----|
+    | **Ensemble A** | `total_system_load` | Maintenance states (velocity > 5) | ~0.69 |
+    | **Ensemble B** | `total_enrolments`  | Growth states | ~0.39 |
+    """)
+
+    comp_file = os.path.join("pkl_models", "model_comparison.json")
+    if os.path.exists(comp_file):
+        comp_df = pd.DataFrame(json.load(open(comp_file))).sort_values("test_r2", ascending=False, na_position="last")
+        styled = comp_df.style
+        if comp_df["test_r2"].notna().any():
+            styled = styled.highlight_max(axis=0, subset=["test_r2"], color="#2e7d32")
+        if comp_df["test_rmse"].notna().any():
+            styled = styled.highlight_min(axis=0, subset=["test_rmse"], color="#2e7d32")
+        st.dataframe(styled, use_container_width=True)
+        st.download_button("📥 Download Leaderboard CSV",
+            comp_df.to_csv(index=False).encode(), "model_leaderboard.csv", "text/csv")
+        fig_lb = px.bar(comp_df, x="model", y="test_r2", color="test_r2",
+                        color_continuous_scale="Greens", template="plotly_dark",
+                        title="Test R² — All Models")
+        fig_lb.update_layout(height=400)
+        st.plotly_chart(fig_lb, use_container_width=True)
+    else:
+        st.info("Run NB02 to populate model_comparison.json")
+
+    st.markdown("---")
+    st.subheader("🔍 SHAP Feature Importance (LightGBM Model B)")
+    _lgb_path  = os.path.join("pkl_models", "lightgbm_model.pkl")
+    _meta       = mdls.get("meta", {})
+    _feat_cols  = _meta.get("feature_cols_B", [])
+    if os.path.exists(_lgb_path) and _feat_cols:
         try:
             import shap
-            _lgbm_model = joblib.load(_lgbm_path)
-            with open(_meta_path) as _fh:
-                _feat_meta = json.load(_fh)
-            _feat_cols = _feat_meta.get('feature_cols', [])
-            # Sample from processed_df for SHAP (max 500 rows — fast)
-            _shap_df = processed_df[[c for c in _feat_cols if c in processed_df.columns]].dropna().sample(
-                min(500, len(processed_df)), random_state=42)
-            _explainer  = shap.TreeExplainer(_lgbm_model)
-            _shap_vals  = _explainer.shap_values(_shap_df)
-            _mean_abs   = np.abs(_shap_vals).mean(axis=0)
-            _shap_series = pd.Series(_mean_abs, index=_shap_df.columns).sort_values(ascending=False).head(20)
-            fig_shap = px.bar(
-                x=_shap_series.values[::-1],
-                y=_shap_series.index[::-1],
-                orientation='h',
-                template='plotly_dark',
-                title='Top 20 Features by Mean |SHAP| Value (LightGBM)',
-                labels={'x': 'Mean |SHAP|', 'y': 'Feature'},
-                color=_shap_series.values[::-1],
-                color_continuous_scale='Teal',
-            )
-            fig_shap.update_layout(height=600, showlegend=False)
-            st.plotly_chart(fig_shap, use_container_width=True)
-            with st.expander("📋 Full SHAP importance table"):
-                st.dataframe(
-                    pd.DataFrame({'Feature': _shap_series.index, 'Mean |SHAP|': _shap_series.values.round(4)}),
-                    use_container_width=True)
-        except Exception as _shap_err:
-            # Fallback: built-in LightGBM feature importance
+            _lgb = joblib.load(_lgb_path)
+            _sc  = mdls["model_B"]["scaler"] if mdls.get("model_B") else None
+            _sdf = feature_df[[c for c in _feat_cols if c in feature_df.columns]].dropna()
+            _sdf = _sdf.sample(min(500, len(_sdf)), random_state=42)
+            _Xs  = _sc.transform(_sdf) if _sc else _sdf.values
+            _exp  = shap.TreeExplainer(_lgb)
+            _sv   = _exp.shap_values(pd.DataFrame(_Xs, columns=_sdf.columns))
+            _si   = pd.Series(np.abs(_sv).mean(0), index=_sdf.columns).sort_values(ascending=False).head(20)
+            fig_sh = px.bar(x=_si.values[::-1], y=_si.index[::-1], orientation="h",
+                            template="plotly_dark", title="Top 20 Features — Mean |SHAP|",
+                            labels={"x":"Mean |SHAP|","y":"Feature"},
+                            color=_si.values[::-1], color_continuous_scale="Teal")
+            fig_sh.update_layout(height=560, showlegend=False)
+            st.plotly_chart(fig_sh, use_container_width=True)
+        except Exception as e:
             try:
-                _lgbm_model = joblib.load(_lgbm_path)
-                _fi = pd.Series(_lgbm_model.feature_importances_,
-                                index=_lgbm_model.feature_name_).sort_values(ascending=False).head(20)
-                fig_fi = px.bar(_fi[::-1], orientation='h', template='plotly_dark',
-                                title='Top 20 Features — LightGBM Gain Importance')
+                _lgb2 = joblib.load(_lgb_path)
+                _fi = pd.Series(_lgb2.feature_importances_, index=_lgb2.feature_name_).sort_values(ascending=False).head(20)
+                fig_fi = px.bar(_fi[::-1], orientation="h", template="plotly_dark",
+                                title="LightGBM Feature Gain Importance")
                 fig_fi.update_layout(height=500)
                 st.plotly_chart(fig_fi, use_container_width=True)
             except Exception:
-                st.info(f"Feature importance unavailable: {_shap_err}")
-    else:
-        st.info("Train LightGBM model (notebook 02) to see SHAP importance.")
+                st.info(f"SHAP unavailable: {e}")
 
-# -----------------------------------------------------------------------------
-# TAB 4: LIVE FORECAST PREDICTOR WITH QUANTILE UNCERTAINTY BOUNDS
-# -----------------------------------------------------------------------------
-with tab4:
-    st.subheader("🔮 Real-Time Inference & Quantile Forecast Bounds (P10, P50, P90)")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        model_choice = st.selectbox("Select Machine Learning Model", list(models_dict.keys()) if models_dict else ["No models loaded"])
-        _state_opts = sorted(panel_df['norm_state'].dropna().unique().tolist())
-        state_choice = st.selectbox("Select State for Forecast", _state_opts if _state_opts else ["No data"])
-    
-    with col2:
-        days_ahead = st.slider("Forecast Horizon (Days)", min_value=1, max_value=30, value=14)
-        
-    if st.button("🚀 Run Live Multi-Step Forecast with Quantile Bounds"):
-        state_data = processed_df[processed_df['norm_state'] == state_choice].sort_values('date')
-        if not state_data.empty and model_choice in models_dict:
-            model_obj = models_dict[model_choice]
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 5: 7-Day Forecast (two-model routing + model selector)
+# ─────────────────────────────────────────────────────────────────────────────
+with tab5:
+    st.subheader("🔮 7-Day State Forecast — Two-Model Intelligence Routing")
 
-            exclude_cols = [
-                'date', 'norm_state', 'state', 'district', 'pincode',
-                'age_0_5', 'age_5_17', 'age_18_greater', 'total_enrolments',
-                'demo_age_5_17', 'demo_age_17_', 'demo_total',
-                'bio_age_5_17', 'bio_age_17_', 'bio_total'
-            ]
+    fc_col1, fc_col2 = st.columns([2, 1])
+    with fc_col1:
+        state_choice = st.selectbox("State", _states, key="fc_state")
+        days_ahead   = st.slider("Forecast horizon (days)", 1, 30, 7)
+    with fc_col2:
+        lc = _lc_df[_lc_df["norm_state"] == state_choice]["stage"].values
+        lc_stage = lc[0] if len(lc) > 0 else "Maintenance"
+        badge_cls = "badge-growth" if lc_stage == "Growth" else "badge-maint"
+        st.markdown(f"""
+        **Lifecycle:** <span class="badge {badge_cls}">{lc_stage}</span><br><br>
+        - **Growth** → Model B (enrolments, R²≈0.39)
+        - **Maintenance** → Model A (system load, R²≈0.69)
+        """, unsafe_allow_html=True)
 
-            # ── LSTM inference path ──────────────────────────────────────
-            if isinstance(model_obj, dict) and model_obj.get('_type') == 'lstm':
-                lstm_net = model_obj['model']
-                scaler = model_obj['scaler']
-                feat_cols = model_obj['feature_cols']
-                lookback = model_obj['lookback']
+    active_mdl_dict = mdls["model_B"] if lc_stage == "Growth" else mdls["model_A"]
+    model_names = list(active_mdl_dict["models"].keys()) + ["Ensemble"] if active_mdl_dict else ["Ensemble"]
+    model_choice = st.selectbox("Model selector", model_names, index=len(model_names)-1)
 
-                if feat_cols is None:
-                    feat_cols = [c for c in state_data.columns if c not in exclude_cols]
-
-                seq_df = state_data[feat_cols].tail(lookback).copy()
-                if scaler is not None:
-                    seq_arr = scaler.transform(seq_df.values)
+    if st.button("🚀 Run Forecast"):
+        state_feat = feature_df[feature_df["norm_state"] == state_choice].sort_values("date")
+        if state_feat.empty:
+            st.warning("No feature data for selected state.")
+        else:
+            latest = state_feat.tail(1)
+            try:
+                if model_choice == "Ensemble":
+                    pred_val = _ensemble_predict(active_mdl_dict, latest)
                 else:
-                    seq_arr = seq_df.values.astype(float)
+                    pred_val = _single_model_predict(active_mdl_dict, model_choice, latest)
+                    if pred_val is None:
+                        pred_val = _ensemble_predict(active_mdl_dict, latest)
+            except Exception as e:
+                st.warning(f"Prediction error: {e}")
+                pred_val = 0
 
-                if len(seq_arr) < lookback:
-                    pad = np.zeros((lookback - len(seq_arr), seq_arr.shape[1]))
-                    seq_arr = np.vstack([pad, seq_arr])
+            # Also compute both models for comparison
+            pred_enrol = pred_load = None
+            if mdls["model_B"]:
+                try: pred_enrol = _ensemble_predict(mdls["model_B"], latest)
+                except: pass
+            if mdls["model_A"]:
+                try: pred_load = _ensemble_predict(mdls["model_A"], latest)
+                except: pass
 
-                x_tensor = torch.tensor(seq_arr[np.newaxis], dtype=torch.float32)
-                with torch.no_grad():
-                    log_pred = lstm_net(x_tensor).item()
-                pred_median = float(np.expm1(max(0.0, log_pred)))
+            primary_label = "Predicted Enrolments (Model B)" if lc_stage == "Growth" else "Predicted System Load (Model A)"
+            c_a, c_b, c_c = st.columns(3)
+            c_a.metric(f"📌 {model_choice} Prediction", f"{int(pred_val or 0):,}")
+            if pred_enrol is not None: c_b.metric("Model B — Enrolments",  f"{int(pred_enrol):,}")
+            if pred_load  is not None: c_c.metric("Model A — System Load", f"{int(pred_load):,}")
 
-            # ── Sklearn / tree-model / Ensemble inference path ───────────
-            else:
-                _meta_path = os.path.join('pkl_models', 'feature_metadata.json')
-                if os.path.exists(_meta_path):
-                    with open(_meta_path) as _fh:
-                        _meta = json.load(_fh)
-                    _trained_cols = _meta.get('feature_cols', [])
-                    _raw_target_models = _meta.get('raw_target_models', ['Ridge Baseline', 'Random Forest'])
-                    _ens_weights = _meta.get('ensemble_weights', {})
-                    feature_cols = [c for c in _trained_cols if c in state_data.columns]
-                else:
-                    _raw_target_models = ['Ridge Baseline', 'Random Forest']
-                    _ens_weights = {}
-                    feature_cols = [c for c in state_data.columns if c not in exclude_cols]
+            # Multi-step quantile forecast
+            hist = state_feat.tail(60)
+            hist_std = float(state_feat["total_enrolments"].tail(30).std()) or (pred_val or 1) * 0.15
+            future_dates = [hist["date"].max() + pd.Timedelta(days=i) for i in range(1, days_ahead+1)]
+            preds_p50 = [(pred_val or 0) * (1 + 0.02*np.sin(i/3)) for i in range(1, days_ahead+1)]
+            preds_p10 = [max(0, p - 1.28*hist_std*np.sqrt(i)) for i, p in enumerate(preds_p50, 1)]
+            preds_p90 = [p + 1.28*hist_std*np.sqrt(i)          for i, p in enumerate(preds_p50, 1)]
 
-                latest_features = state_data[feature_cols].tail(1)
-                _scaler_path = os.path.join('pkl_models', 'raw_target_scaler.pkl')
+            y_col = "total_enrolments" if lc_stage == "Growth" else "total_system_load"
+            if y_col not in hist.columns: y_col = "total_enrolments"
 
-                # ── Ensemble: blend all 4 base models ───────────────────
-                if isinstance(model_obj, dict) and 'weights' in model_obj:
-                    _ens_w = model_obj['weights']
-                    _ens_pred = 0.0
-                    _raw_scaler = joblib.load(_scaler_path) if os.path.exists(_scaler_path) else None
-                    _scaled = _raw_scaler.transform(latest_features) if _raw_scaler else latest_features.values
-                    _model_files = {
-                        'Ridge Baseline': 'ridge_baseline_model.pkl',
-                        'Random Forest':  'random_forest_model.pkl',
-                        'XGBoost':        'xgboost_model.pkl',
-                        'LightGBM':       'lightgbm_model.pkl',
-                    }
-                    for _mn, _mf in _model_files.items():
-                        _mp = os.path.join('pkl_models', _mf)
-                        if not os.path.exists(_mp) or _mn not in _ens_w: continue
-                        _bm = joblib.load(_mp)
-                        _w  = _ens_w[_mn]
-                        if _mn in _raw_target_models:
-                            _p = max(0.0, float(_bm.predict(_scaled)[0]))
-                        else:
-                            _p = max(0.0, float(np.expm1(max(0.0, _bm.predict(latest_features)[0]))))
-                        _ens_pred += _w * _p
-                    pred_median = max(0.0, _ens_pred)
-
-                # ── Ridge / RF: raw target + StandardScaler ──────────────
-                elif any(m.lower() in model_choice.lower() for m in _raw_target_models) and os.path.exists(_scaler_path):
-                    _raw_scaler = joblib.load(_scaler_path)
-                    pred_median = max(0.0, float(model_obj.predict(_raw_scaler.transform(latest_features))[0]))
-
-                # ── Gradient boosting: log1p target ──────────────────────
-                else:
-                    log_pred = float(model_obj.predict(latest_features)[0])
-                    pred_median = max(0.0, float(np.expm1(max(0.0, log_pred))))
-
-            # Estimate residual uncertainty std
-            hist_std = float(state_data['total_enrolments'].tail(30).std())
-            if np.isnan(hist_std) or hist_std == 0:
-                hist_std = pred_median * 0.15
-
-            pred_p10 = max(0.0, pred_median - 1.28 * hist_std)
-            pred_p90 = pred_median + 1.28 * hist_std
-            
-            m1, m2, m3 = st.columns(3)
-            with m1:
-                st.metric("P10 Lower Bound (10th percentile)", f"{int(pred_p10):,}")
-            with m2:
-                st.metric("P50 Median Forecast", f"{int(pred_median):,}")
-            with m3:
-                st.metric("P90 Upper Bound (90th percentile)", f"{int(pred_p90):,}")
-            
-            # Multi-step projections with quantile bounds
-            hist_tail = state_data.tail(30)
-            future_dates = [hist_tail['date'].max() + pd.Timedelta(days=i) for i in range(1, days_ahead + 1)]
-            
-            preds_p50 = [pred_median * (1 + 0.02 * np.sin(i / 3)) for i in range(1, days_ahead + 1)]
-            preds_p10 = [max(0.0, p - 1.28 * hist_std * np.sqrt(i)) for i, p in enumerate(preds_p50, 1)]
-            preds_p90 = [p + 1.28 * hist_std * np.sqrt(i) for i, p in enumerate(preds_p50, 1)]
-            
             fig_fc = go.Figure()
-            # Historical actuals
-            fig_fc.add_trace(go.Scatter(x=hist_tail['date'], y=hist_tail['total_enrolments'], name='Historical Actual', line=dict(color='#1f77b4', width=2)))
-            
-            # P90 upper bound
-            fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p90, name='P90 Upper Bound', line=dict(color='rgba(255,127,14,0.3)', width=1, dash='dash')))
-            # P10 lower bound with fill to P90
-            fig_fc.add_trace(go.Scatter(
-                x=future_dates, y=preds_p10, name='P10 Lower Bound',
-                fill='tonexty', fillcolor='rgba(255,127,14,0.15)',
-                line=dict(color='rgba(255,127,14,0.3)', width=1, dash='dash')
-            ))
-            # P50 Median Forecast
-            fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p50, name='P50 Median Forecast', line=dict(color='#ff7f0e', width=3)))
-            
+            fig_fc.add_trace(go.Scatter(x=hist["date"], y=hist[y_col],
+                name="Historical", line=dict(color="#1f77b4", width=2)))
+            fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p90,
+                name="P90", line=dict(color="rgba(255,127,14,0.3)", dash="dash")))
+            fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p10,
+                name="P10", fill="tonexty",
+                fillcolor="rgba(255,127,14,0.12)",
+                line=dict(color="rgba(255,127,14,0.3)", dash="dash")))
+            fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p50,
+                name=f"P50 — {model_choice}", line=dict(color="#ff7f0e", width=3)))
             fig_fc.update_layout(
-                title=f"{days_ahead}-Day Quantile Forecast Projection for {state_choice} ({model_choice})",
-                template='plotly_dark',
-                xaxis_title='Date',
-                yaxis_title='Enrolment Volume',
-                height=480,
-                hovermode='x unified'
+                template="plotly_dark", height=480, hovermode="x unified",
+                title=f"{days_ahead}-Day Forecast — {state_choice} [{lc_stage}] · {model_choice}"
             )
             st.plotly_chart(fig_fc, use_container_width=True)
-        else:
-            st.warning("Selected model file or state data is unavailable.")
 
-# -----------------------------------------------------------------------------
-# TAB 5: ANOMALY ALERT ENGINE & WEBHOOK DISPATCHER
-# -----------------------------------------------------------------------------
-with tab5:
-    st.subheader("🚨 Rolling Z-Score Spike & Automated Webhook Alert Engine")
-    
-    z_thresh = st.slider("Z-Score Sensitivity Threshold", min_value=2.0, max_value=5.0, value=3.0, step=0.1)
-    
-    anomaly_df = filtered_df.copy().sort_values(['norm_state', 'date'])
-    anom_results = []
-    for state, group in anomaly_df.groupby('norm_state'):
-        group = group.copy()
-        roll_mean = group['total_enrolments'].rolling(window=14, min_periods=3).mean()
-        roll_std = group['total_enrolments'].rolling(window=14, min_periods=3).std().fillna(1.0)
-        
-        z_scores = (group['total_enrolments'] - roll_mean) / np.maximum(roll_std, 1e-5)
-        group['z_score'] = z_scores.fillna(0)
-        group['is_anomaly'] = np.abs(group['z_score']) > z_thresh
-        
-        anom_results.append(group[group['is_anomaly']])
-        
-    # anom_results always contains entries (possibly empty DFs) — check content, not list length
-    anom_full = pd.concat(anom_results, ignore_index=True) if anom_results else pd.DataFrame()
-    if not anom_full.empty:
-        st.metric("Total Flagged Anomaly Events", f"{len(anom_full)}")
+            # Forecast table
+            fc_table = pd.DataFrame({
+                "Date": future_dates,
+                "P10 (Low)": [int(p) for p in preds_p10],
+                "P50 (Forecast)": [int(p) for p in preds_p50],
+                "P90 (High)": [int(p) for p in preds_p90],
+            })
+            st.dataframe(fc_table, use_container_width=True)
+            st.download_button("📥 Download Forecast CSV",
+                fc_table.to_csv(index=False).encode(), "forecast.csv", "text/csv")
 
-        # Download Anomaly CSV button
-        st.download_button(
-            label="📥 Download Flagged Anomaly Log CSV",
-            data=anom_full[['date', 'norm_state', 'total_enrolments', 'z_score']].to_csv(index=False).encode('utf-8'),
-            file_name="aadhaar_flagged_anomalies.csv",
-            mime="text/csv"
-        )
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 6: Anomaly Engine
+# ─────────────────────────────────────────────────────────────────────────────
+with tab6:
+    st.subheader("🚨 Anomaly Alert Engine")
 
-        st.dataframe(
-            anom_full[['date', 'norm_state', 'total_enrolments', 'z_score']]
-            .sort_values('z_score', ascending=False)
-            .head(20),
-            use_container_width=True
-        )
+    a6_col1, a6_col2 = st.columns(2)
+    with a6_col1:
+        z_thresh = st.slider("Z-Score Threshold", 2.0, 5.0, 3.0, 0.1)
+    with a6_col2:
+        iso_contamination = st.slider("Isolation Forest contamination", 0.01, 0.15, 0.05, 0.01)
 
-        # Interactive Webhook Payload Simulator
-        st.subheader("🔔 Automated Webhook Alert Dispatch Simulator")
-        if st.button("⚡ Simulate Sending Webhook Payload Alert for Top Anomaly Spike"):
-            top_row = anom_full.sort_values('z_score', ascending=False).iloc[0]
-            payload = {
-                "event": "AADHAAR_CAMPAIGN_SPIKE_DETECTED",
-                "timestamp": top_row['date'].strftime('%Y-%m-%d'),
-                "state": top_row['norm_state'],
-                "observed_volume": int(top_row['total_enrolments']),
-                "z_score": round(float(top_row['z_score']), 2),
-                "severity": "CRITICAL" if abs(top_row['z_score']) > 4.0 else "WARNING",
-                "webhook_target": "https://api.uidai.gov.in/alerts/v1/webhook"
+    # Z-score anomaly detection
+    anom_rows = []
+    for state, grp in filt.sort_values(["norm_state","date"]).groupby("norm_state"):
+        grp = grp.copy()
+        rm  = grp["total_enrolments"].rolling(14, min_periods=3).mean()
+        rs  = grp["total_enrolments"].rolling(14, min_periods=3).std().fillna(1)
+        grp["z_score"]   = ((grp["total_enrolments"] - rm) / np.maximum(rs, 1e-5)).fillna(0)
+        grp["is_anomaly"] = np.abs(grp["z_score"]) > z_thresh
+        anom_rows.append(grp[grp["is_anomaly"]])
+
+    anom_full = pd.concat(anom_rows, ignore_index=True) if anom_rows else pd.DataFrame()
+
+    # Isolation Forest on national daily data
+    daily_nat = panel_df.groupby("date")[["total_enrolments","demo_total","bio_total"]].sum().reset_index()
+    daily_nat["update_total"]  = daily_nat["demo_total"] + daily_nat["bio_total"]
+    daily_nat["velocity"]      = daily_nat["update_total"] / (daily_nat["total_enrolments"] + 1)
+    daily_nat["rolling_enrol"] = daily_nat["total_enrolments"].rolling(7, min_periods=1).mean()
+
+    iso = IsolationForest(contamination=iso_contamination, random_state=42)
+    feats_iso = daily_nat[["total_enrolments","update_total","velocity","rolling_enrol"]].fillna(0)
+    daily_nat["iso_flag"] = iso.fit_predict(feats_iso) == -1
+    daily_nat["anomaly_score"] = -iso.score_samples(feats_iso)  # higher = more anomalous
+
+    m_a, m_b, m_c = st.columns(3)
+    m_a.metric("Z-Score Anomaly Events", len(anom_full) if not anom_full.empty else 0)
+    m_b.metric("Isolation Forest Flags", int(daily_nat["iso_flag"].sum()))
+    m_c.metric("Flagged Days %", f"{daily_nat['iso_flag'].mean()*100:.1f}%")
+
+    st.markdown("---")
+
+    # Scatter: enrolments vs velocity (like their scatter plot)
+    st.subheader("🔵 Enrolments vs Update Velocity — Isolation Forest Classification")
+    scatter_normal = daily_nat[~daily_nat["iso_flag"]]
+    scatter_anom   = daily_nat[daily_nat["iso_flag"]]
+
+    fig_scatter = go.Figure()
+    fig_scatter.add_trace(go.Scatter(
+        x=scatter_normal["total_enrolments"], y=scatter_normal["velocity"],
+        mode="markers", name="Normal",
+        marker=dict(color="#1f77b4", size=8, opacity=0.7),
+        text=scatter_normal["date"].astype(str), hovertemplate="Date: %{text}<br>Enrolments: %{x:,}<br>Velocity: %{y:.1f}x"
+    ))
+    fig_scatter.add_trace(go.Scatter(
+        x=scatter_anom["total_enrolments"], y=scatter_anom["velocity"],
+        mode="markers", name="⚠️ Suspicious",
+        marker=dict(color="red", size=12, symbol="x", line=dict(width=2)),
+        text=scatter_anom["date"].astype(str), hovertemplate="Date: %{text}<br>Enrolments: %{x:,}<br>Velocity: %{y:.1f}x"
+    ))
+    fig_scatter.update_layout(
+        template="plotly_dark", height=420, hovermode="closest",
+        title="Enrolments vs Update Velocity — Suspicious = Impossible Processing Speed / Fraud Signal",
+        xaxis_title="Total Enrolments", yaxis_title="Update Velocity (ratio)"
+    )
+    st.plotly_chart(fig_scatter, use_container_width=True)
+
+    # Time-series anomaly overlay
+    fig_iso = go.Figure()
+    fig_iso.add_trace(go.Scatter(x=scatter_normal["date"], y=scatter_normal["total_enrolments"],
+        mode="lines", name="Normal", line=dict(color="#1f77b4", width=1.5)))
+    fig_iso.add_trace(go.Scatter(x=scatter_anom["date"], y=scatter_anom["total_enrolments"],
+        mode="markers", name="⚠️ Suspicious",
+        marker=dict(color="red", size=12, symbol="x", line=dict(width=2))))
+    fig_iso.update_layout(template="plotly_dark", height=380, hovermode="x unified",
+        title="Isolation Forest — Suspicious Days (Potential Fraud / Data Quality Issue)")
+    st.plotly_chart(fig_iso, use_container_width=True)
+
+    # Anomaly data table
+    st.subheader("📋 Detected Anomaly Log")
+    if not daily_nat[daily_nat["iso_flag"]].empty:
+        anom_table = daily_nat[daily_nat["iso_flag"]][
+            ["date","total_enrolments","update_total","velocity","anomaly_score"]
+        ].copy()
+        anom_table = anom_table.rename(columns={
+            "date": "Date", "total_enrolments": "Enrolments",
+            "update_total": "Update Load", "velocity": "Velocity",
+            "anomaly_score": "Anomaly Score"
+        })
+        anom_table["Velocity"] = anom_table["Velocity"].round(1)
+        anom_table["Anomaly Score"] = anom_table["Anomaly Score"].round(4)
+        st.dataframe(anom_table.sort_values("Anomaly Score", ascending=False).reset_index(drop=True),
+                     use_container_width=True)
+        st.download_button("📥 Download Anomaly Log",
+            anom_table.to_csv(index=False).encode(), "anomaly_log.csv", "text/csv")
+
+        if st.button("⚡ Generate Fraud Prevention Alert"):
+            worst = daily_nat[daily_nat["iso_flag"]].sort_values("anomaly_score", ascending=False).iloc[0]
+            alert = {
+                "event":       "AADHAAR_FRAUD_RISK_DETECTED",
+                "date":        worst["date"].strftime("%Y-%m-%d"),
+                "enrolments":  int(worst["total_enrolments"]),
+                "update_load": int(worst["update_total"]),
+                "velocity":    round(float(worst["velocity"]), 1),
+                "anomaly_score": round(float(worst["anomaly_score"]), 4),
+                "risk_level":  "HIGH" if worst["velocity"] > 100 else "MEDIUM",
+                "recommended_action": "Audit state-level data submissions for this date",
             }
-            st.code(json.dumps(payload, indent=2), language="json")
-            st.success("✅ Simulated Webhook alert payload dispatched to UIDAI Monitoring Endpoint!")
+            st.code(json.dumps(alert, indent=2), language="json")
+            st.error("🚨 Fraud Prevention Alert Generated — Review flagged submissions")
 
-        fig_anom = px.scatter(
-            anom_full,
-            x='date',
-            y='total_enrolments',
-            color='norm_state',
-            size=np.abs(anom_full['z_score']),
-            template='plotly_dark',
-            title='Detected Campaign Spikes across States'
-        )
-        fig_anom.update_layout(height=450)
-        st.plotly_chart(fig_anom, use_container_width=True)
+    # Z-score spikes
+    if not anom_full.empty:
+        st.markdown("---")
+        st.subheader("📈 Z-Score Spike Map — Campaign Anomalies by State")
+        st.download_button("📥 Download Z-Score Log",
+            anom_full[["date","norm_state","total_enrolments","z_score"]].to_csv(index=False).encode(),
+            "zscore_anomaly_log.csv", "text/csv")
+        fig_an = px.scatter(anom_full, x="date", y="total_enrolments", color="norm_state",
+            size=np.abs(anom_full["z_score"]), template="plotly_dark",
+            title="Campaign Spikes Detected Across States (Z-Score Method)")
+        fig_an.update_layout(height=430)
+        st.plotly_chart(fig_an, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 7: Intelligence Engine
+# ─────────────────────────────────────────────────────────────────────────────
+with tab7:
+    st.subheader("🧠 The Intelligence Engine")
+    st.markdown("**Architecture:** Raw CSV Data → Data Cleaning & Aggregation → **The Intelligence Engine** → 3 Action Modules")
+
+    fig_arch = go.Figure()
+    boxes = [
+        (0.05, 0.5, "Raw CSV<br>Data",               "#455A64"),
+        (0.22, 0.5, "Data Cleaning<br>& Aggregation","#1565C0"),
+        (0.42, 0.5, "The Intelligence<br>Engine",     "#6A1B9A"),
+        (0.65, 0.75, "Module 1<br>Operations",        "#1565C0"),
+        (0.65, 0.50, "Module 2<br>Migration",         "#2E7D32"),
+        (0.65, 0.25, "Module 3<br>Anomalies",         "#B71C1C"),
+        (0.88, 0.75, "Resource<br>Optimization",      "#0D47A1"),
+        (0.88, 0.50, "Policy<br>Alerts",              "#1B5E20"),
+        (0.88, 0.25, "Fraud<br>Prevention",           "#7F0000"),
+    ]
+    for (x, y, txt, col) in boxes:
+        fig_arch.add_shape(type="rect", x0=x-0.07, x1=x+0.07, y0=y-0.1, y1=y+0.1,
+                           fillcolor=col, line=dict(color="white", width=1), xref="paper", yref="paper")
+        fig_arch.add_annotation(x=x, y=y, text=txt, showarrow=False, font=dict(color="white", size=11),
+                                xref="paper", yref="paper", align="center")
+    arrows = [(0.12, 0.5, 0.15, 0.5), (0.29, 0.5, 0.35, 0.5),
+              (0.49, 0.5, 0.57, 0.75), (0.49, 0.5, 0.57, 0.5), (0.49, 0.5, 0.57, 0.25),
+              (0.72, 0.75, 0.80, 0.75), (0.72, 0.5, 0.80, 0.5), (0.72, 0.25, 0.80, 0.25)]
+    for (x0, y0, x1, y1) in arrows:
+        fig_arch.add_shape(type="line", x0=x0, y0=y0, x1=x1, y1=y1,
+                           xref="paper", yref="paper",
+                           line=dict(color="white", width=1.5))
+    fig_arch.update_layout(height=300, paper_bgcolor="#0E1117", plot_bgcolor="#0E1117",
+                           xaxis=dict(visible=False), yaxis=dict(visible=False), margin=dict(l=0,r=0,t=20,b=0))
+    st.plotly_chart(fig_arch, use_container_width=True)
+    st.markdown("---")
+
+    # Module 1: Operations
+    st.markdown('<div class="module-card mod-ops"><b>🔵 Module 1: Operations → Resource Optimization</b></div>',
+                unsafe_allow_html=True)
+    st.markdown("**Model A** predicts `total_system_load` → plan operator staffing, server capacity, energy.")
+    if mdls["model_A"]:
+        meta_A = mdls["meta"]
+        st.info(f"Model A Ensemble · Test R² = {meta_A.get('model_A_r2','–')}  ·  Target: total_system_load")
+        last_date = feature_df["date"].max()
+        last_feat  = feature_df[feature_df["date"] == last_date].copy()
+        if not last_feat.empty:
+            preds_load = []
+            for _, row in last_feat.iterrows():
+                try:
+                    p = _ensemble_predict(mdls["model_A"], pd.DataFrame([row]))
+                    preds_load.append({"norm_state": row["norm_state"], "predicted_load": p})
+                except Exception:
+                    pass
+            if preds_load:
+                load_df = pd.DataFrame(preds_load).sort_values("predicted_load", ascending=False)
+                # Highlight alert states
+                load_df["alert"] = load_df["norm_state"].isin(_alert_states)
+                fig_load = px.bar(load_df.head(15), x="predicted_load", y="norm_state",
+                    orientation="h", template="plotly_dark",
+                    title=f"Predicted System Load by State ({last_date.date()})  ⚠️ = 90th pct",
+                    color="predicted_load", color_continuous_scale="Blues",
+                    labels={"predicted_load": "System Load", "norm_state": "State"})
+                fig_load.update_layout(yaxis={"categoryorder":"total ascending"}, height=420)
+                st.plotly_chart(fig_load, use_container_width=True)
+                with st.expander("📋 Full Ops Load Table"):
+                    st.dataframe(load_df.drop(columns=["alert"]), use_container_width=True)
     else:
-        st.info("No anomalies detected at current threshold.")
+        st.warning("Model A not loaded — run NB02.")
+
+    st.markdown("---")
+
+    # Module 2: Migration
+    st.markdown('<div class="module-card mod-mig"><b>🟢 Module 2: Migration → Policy Alerts</b></div>',
+                unsafe_allow_html=True)
+    st.markdown("**Model B** predicts `total_enrolments` for **Growth** states → mobile camps, awareness drives, allocation.")
+    if mdls["model_B"]:
+        meta_B = mdls["meta"]
+        st.info(f"Model B Ensemble · Test R² = {meta_B.get('model_B_r2','–')}  ·  Target: total_enrolments (Growth states)")
+        last_date  = feature_df["date"].max()
+        last_feat  = feature_df[feature_df["date"] == last_date].copy()
+        growth_feat = last_feat[last_feat["norm_state"].isin(growth_states)]
+        if not growth_feat.empty:
+            preds_enrol = []
+            for _, row in growth_feat.iterrows():
+                try:
+                    p = _ensemble_predict(mdls["model_B"], pd.DataFrame([row]))
+                    preds_enrol.append({"norm_state": row["norm_state"], "predicted_enrolments": p})
+                except Exception:
+                    pass
+            if preds_enrol:
+                enrol_df = pd.DataFrame(preds_enrol).sort_values("predicted_enrolments", ascending=False)
+                fig_enrol = px.bar(enrol_df, x="predicted_enrolments", y="norm_state",
+                    orientation="h", template="plotly_dark",
+                    title=f"Policy Alert: Predicted Enrolments — Growth States ({last_date.date()})",
+                    color="predicted_enrolments", color_continuous_scale="Greens",
+                    labels={"predicted_enrolments": "Predicted Enrolments", "norm_state": "State"})
+                fig_enrol.update_layout(yaxis={"categoryorder":"total ascending"}, height=350)
+                st.plotly_chart(fig_enrol, use_container_width=True)
+        lc_show = _lc_df[["norm_state","ratio","stage"]].rename(
+            columns={"norm_state":"State","ratio":"Update/Enrol Ratio","stage":"Lifecycle Stage"})
+        lc_show["Update/Enrol Ratio"] = lc_show["Update/Enrol Ratio"].round(1)
+        st.dataframe(lc_show.sort_values("Update/Enrol Ratio", ascending=False), use_container_width=True)
+    else:
+        st.warning("Model B not loaded — run NB02.")
+
+    st.markdown("---")
+
+    # Module 3: Anomalies
+    st.markdown('<div class="module-card mod-anom"><b>🔴 Module 3: Anomalies → Fraud Prevention</b></div>',
+                unsafe_allow_html=True)
+    st.markdown("**Isolation Forest** (5% contamination) on national daily data → flags suspicious spikes.")
+    daily_nat2 = panel_df.groupby("date")[["total_enrolments","demo_total","bio_total"]].sum().reset_index()
+    daily_nat2["update_total"] = daily_nat2["demo_total"] + daily_nat2["bio_total"]
+    daily_nat2["velocity"]     = daily_nat2["update_total"] / (daily_nat2["total_enrolments"] + 1)
+    daily_nat2["rolling_enrol"]= daily_nat2["total_enrolments"].rolling(7, min_periods=1).mean()
+    iso2 = IsolationForest(contamination=0.05, random_state=42)
+    feats2 = daily_nat2[["total_enrolments","update_total","velocity","rolling_enrol"]].fillna(0)
+    daily_nat2["anomaly"] = iso2.fit_predict(feats2) == -1
+    n_anom2 = daily_nat2["anomaly"].sum()
+    st.metric("Flagged Suspicious Days (Isolation Forest, 5%)", int(n_anom2))
+    fig_iso2 = go.Figure()
+    nd2 = daily_nat2[~daily_nat2["anomaly"]]
+    fd2 = daily_nat2[daily_nat2["anomaly"]]
+    fig_iso2.add_trace(go.Scatter(x=nd2["date"], y=nd2["total_enrolments"],
+        mode="lines", name="Normal", line=dict(color="#1f77b4", width=1.5)))
+    fig_iso2.add_trace(go.Scatter(x=fd2["date"], y=fd2["total_enrolments"],
+        mode="markers", name="⚠️ Suspicious",
+        marker=dict(color="red", size=12, symbol="x", line=dict(width=2))))
+    fig_iso2.update_layout(template="plotly_dark", height=380, hovermode="x unified",
+        title="Isolation Forest — Suspicious Days (Potential Fraud)")
+    st.plotly_chart(fig_iso2, use_container_width=True)
+
+    if n_anom2 > 0:
+        susp2 = daily_nat2[daily_nat2["anomaly"]][["date","total_enrolments","update_total","velocity"]]
+        st.dataframe(susp2.sort_values("date").reset_index(drop=True), use_container_width=True)
+
+    st.markdown("---")
+    meta = mdls.get("meta", {})
+    st.markdown(f"""
+**Model Summary:**
+| Model | Target | R² | Use Case |
+|-------|--------|----|----------|
+| Ensemble A | `total_system_load` | **{meta.get('model_A_r2','–')}** | Module 1 — Ops/Infra |
+| Ensemble B | `total_enrolments`  | **{meta.get('model_B_r2','–')}** | Module 2 — Migration |
+| Isolation Forest | anomaly flag | 95% coverage | Module 3 — Fraud |
+
+**Routing:** `lifecycle_stage` (system_velocity > 5 = Maintenance → Model A, else Growth → Model B)
+    """)
