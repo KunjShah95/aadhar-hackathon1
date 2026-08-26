@@ -1,78 +1,36 @@
 {
-  "timestamp": "2026-08-25 08:35:36",
-  "overall_drift_status": "NO_DRIFT",
-  "models_health": {
-    "ensemble_meta.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'dict'>"
+  "audit_timestamp": "2026-08-26 18:11:33.462362",
+  "models_audited": 19,
+  "drift_status": [
+    {
+      "Feature": "total_system_load",
+      "PSI Score": 0.0594,
+      "KS Statistic": 0.0532,
+      "p-value": "5.93e-02",
+      "Drift Status": "STABLE"
     },
-    "lightgbm_model.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'lightgbm.sklearn.LGBMRegressor'>"
+    {
+      "Feature": "total_enrolments",
+      "PSI Score": 0.4682,
+      "KS Statistic": 0.3117,
+      "p-value": "3.08e-53",
+      "Drift Status": "CRITICAL_DRIFT"
     },
-    "lstm_scaler.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'sklearn.preprocessing._data.StandardScaler'>"
+    {
+      "Feature": "demo_total",
+      "PSI Score": 0.1134,
+      "KS Statistic": 0.0964,
+      "p-value": "2.06e-05",
+      "Drift Status": "MODERATE_DRIFT"
     },
-    "modelA_ensemble_meta.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'dict'>"
-    },
-    "modelA_lgb.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'lightgbm.sklearn.LGBMRegressor'>"
-    },
-    "modelA_rf.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'sklearn.ensemble._forest.RandomForestRegressor'>"
-    },
-    "modelA_ridge.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
-    },
-    "modelA_scaler.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'sklearn.preprocessing._data.StandardScaler'>"
-    },
-    "modelA_xgb.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'xgboost.sklearn.XGBRegressor'>"
-    },
-    "random_forest_model.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'sklearn.ensemble._forest.RandomForestRegressor'>"
-    },
-    "ridge_baseline_model.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'sklearn.linear_model._ridge.Ridge'>"
-    },
-    "ridge_scaler.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'sklearn.preprocessing._data.StandardScaler'>"
-    },
-    "xgboost_model.pkl": {
-      "status": "HEALTHY",
-      "type": "<class 'xgboost.sklearn.XGBRegressor'>"
+    {
+      "Feature": "bio_total",
+      "PSI Score": 0.0505,
+      "KS Statistic": 0.0902,
+      "p-value": "8.53e-05",
+      "Drift Status": "STABLE"
     }
-  },
-  "feature_drift_metrics": {
-    "total_enrolments": {
-      "ks_statistic": 0.0404,
-      "p_value": 0.0,
-      "psi_score": 0.0098,
-      "status": "STABLE"
-    },
-    "demo_total": {
-      "ks_statistic": 0.085,
-      "p_value": 0.2422,
-      "psi_score": 0.0644,
-      "status": "STABLE"
-    },
-    "bio_total": {
-      "ks_statistic": 0.085,
-      "p_value": 0.2422,
-      "psi_score": 0.0644,
-      "status": "STABLE"
-    }
-  }
+  ],
+  "anomalies_detected": 0,
+  "recent_incidents": []
 }
