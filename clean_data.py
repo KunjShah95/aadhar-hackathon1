@@ -262,9 +262,7 @@ def generate_summary_tables(panel_df):
 
     return monthly_national, state_summary
 
-# ─────────────────────────────────────────────────────────────────────────────
 # MAIN EXECUTION
-# ─────────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 70)
     print(" Aadhaar Intelligence Engine — Data Cleaning Pipeline")
