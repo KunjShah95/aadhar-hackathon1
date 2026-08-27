@@ -151,6 +151,110 @@ def _norm(val):
     result = STATE_ALIASES.get(s.lower())
     return result if result else np.nan
 
+# ── Inference feature helpers (mirrors train_models.py build_features) ────────
+_POP_QUINTILES = np.quantile(list(STATE_POPULATION.values()), [0.2, 0.4, 0.6, 0.8])
+
+def _pop_tier(state):
+    return int(np.searchsorted(_POP_QUINTILES, STATE_POPULATION.get(state, _MEDIAN_POP)))
+
+def _hol_vecs(dates_series):
+    dates = pd.to_datetime(dates_series)
+    hdays = INDIA_HOLIDAYS_2025
+    is_hol = dates.isin(hdays).astype(int).values
+    d2n = np.full(len(dates), 30.0)
+    d2p = np.full(len(dates), 30.0)
+    for i, d in enumerate(dates):
+        fut = hdays[hdays > d]
+        pas = hdays[hdays <= d]
+        if len(fut): d2n[i] = min((fut.min() - d).days, 30)
+        if len(pas): d2p[i] = min((d - pas.max()).days, 30)
+    return is_hol, d2n, d2p
+
+@st.cache_data(show_spinner=False)
+def build_inference_df(df):
+    """Feature engineering matching train_models.py — used for model predictions."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    if "total_system_load" not in df.columns:
+        for c in ["total_enrolments","demo_total","bio_total"]:
+            if c not in df.columns: df[c] = 0
+        df["total_system_load"] = df["total_enrolments"] + df["demo_total"] + df["bio_total"]
+
+    dfs = []
+    for state, grp in df.groupby("norm_state"):
+        grp = grp.sort_values("date").copy()
+        full_idx = pd.date_range(grp["date"].min(), grp["date"].max(), freq="D")
+        grp = grp.set_index("date").reindex(full_idx); grp.index.name = "date"
+        for c in ["bio_total","demo_total","age_0_5","age_5_17","age_18_greater"]:
+            if c in grp.columns: grp[c] = grp[c].ffill(limit=7).fillna(0)
+        grp["norm_state"] = state; grp = grp.reset_index()
+        pop = STATE_POPULATION.get(state, _MEDIAN_POP)
+        grp["day_of_week"]  = grp["date"].dt.dayofweek
+        grp["day_of_month"] = grp["date"].dt.day
+        grp["month"]        = grp["date"].dt.month
+        grp["quarter"]      = grp["date"].dt.quarter
+        grp["day_of_year"]  = grp["date"].dt.dayofyear
+        grp["is_weekend"]   = grp["day_of_week"].isin([5,6]).astype(int)
+        grp["days_since_start"] = (grp["date"] - grp["date"].min()).dt.days
+        grp["sin_dow"]   = np.sin(2*np.pi*grp["day_of_week"]/7)
+        grp["cos_dow"]   = np.cos(2*np.pi*grp["day_of_week"]/7)
+        grp["sin_month"] = np.sin(2*np.pi*grp["month"]/12)
+        grp["cos_month"] = np.cos(2*np.pi*grp["month"]/12)
+        grp["log_state_pop"]  = np.log1p(pop)
+        grp["state_pop_tier"] = _pop_tier(state)
+        grp["state_cat"]      = hash(state) % 100
+        is_hol, d2n, d2p = _hol_vecs(grp["date"])
+        grp["is_holiday"]         = is_hol
+        grp["days_to_holiday"]    = d2n
+        grp["days_since_holiday"] = d2p
+        grp["holiday_proximity"]  = np.exp(-d2n / 7)
+        grp["holiday_recency"]    = np.exp(-d2p / 7)
+        te = grp["total_enrolments"]; tl = grp["total_system_load"]
+        for lag in [1, 3, 7, 14, 30]:
+            grp[f"lag_{lag}"]      = te.shift(lag)
+            grp[f"bio_lag_{lag}"]  = grp["bio_total"].shift(lag)
+            grp[f"demo_lag_{lag}"] = grp["demo_total"].shift(lag)
+            grp[f"load_lag_{lag}"] = tl.shift(lag)
+        for w in [3, 7, 14, 30]:
+            se = te.shift(1); sl = tl.shift(1)
+            grp[f"rolling_mean_{w}"] = se.rolling(w, min_periods=1).mean()
+            grp[f"rolling_std_{w}"]  = se.rolling(w, min_periods=1).std().fillna(0)
+            grp[f"load_rolling_{w}"] = sl.rolling(w, min_periods=1).mean()
+            grp[f"load_std_{w}"]     = sl.rolling(w, min_periods=1).std().fillna(0)
+            grp[f"bio_rolling_{w}"]  = grp["bio_total"].shift(1).rolling(w, min_periods=1).mean()
+            grp[f"demo_rolling_{w}"] = grp["demo_total"].shift(1).rolling(w, min_periods=1).mean()
+        grp["bio_to_enrol_ratio"]  = (grp["bio_rolling_7"]  / (grp["rolling_mean_7"] + 1)).fillna(0)
+        grp["demo_to_enrol_ratio"] = (grp["demo_rolling_7"] / (grp["rolling_mean_7"] + 1)).fillna(0)
+        grp["rolling_cv_7"]        = (grp["rolling_std_7"]  / (grp["rolling_mean_7"] + 1)).fillna(0)
+        grp["lag_1_per_1000"]          = grp["lag_1"] / pop * 1000
+        grp["lag_7_per_1000"]          = grp["lag_7"] / pop * 1000
+        grp["rolling_mean_7_per_1000"] = grp["rolling_mean_7"] / pop * 1000
+        grp["lag_diff_1_7"]  = grp["lag_1"] - grp["lag_7"]
+        grp["lag_diff_7_14"] = grp["lag_7"] - grp["lag_14"]
+        s1 = grp["total_enrolments"].shift(1)
+        grp["ewm_7"]           = s1.ewm(span=7, min_periods=1).mean()
+        grp["ewm_trend"]       = ((grp["ewm_7"] - grp["rolling_mean_30"]) / (grp["rolling_mean_30"] + 1)).fillna(0)
+        grp["system_velocity"] = ((grp["bio_rolling_7"] + grp["demo_rolling_7"]) / (grp["rolling_mean_7"] + 1)).fillna(0)
+        grp["mom_growth"]      = ((grp["rolling_mean_7"] - grp["rolling_mean_30"]) / (grp["rolling_mean_30"] + 1)).fillna(0)
+        grp["lifecycle_stage"] = (grp["system_velocity"] > 5.0).astype(int)
+        grp["total_enrolments"]  = grp["total_enrolments"].fillna(0)
+        grp["total_system_load"] = grp["total_system_load"].fillna(0)
+        dfs.append(grp)
+
+    if not dfs:
+        return pd.DataFrame()
+    out = pd.concat(dfs, ignore_index=True).fillna(0)
+    ss_path = os.path.join("pkl_models", "state_stats.csv")
+    if os.path.exists(ss_path):
+        ss = pd.read_csv(ss_path)
+        out = out.merge(ss, on="norm_state", how="left")
+        for c in ["state_mean_enrol","state_std_enrol","state_median_enrol"]:
+            if c in out.columns:
+                out[c] = out[c].fillna(out[c].mean())
+    return out
+
 # ── Data loaders ──────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_raw_data():
@@ -189,9 +293,13 @@ def load_raw_data():
 
 @st.cache_data(show_spinner=False)
 def build_feature_panel(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["norm_state","date"]).reset_index(drop=True)
+    if df["date"].dropna().empty:
+        return pd.DataFrame()
 
     states    = df["norm_state"].dropna().unique()
     all_dates = pd.date_range(df["date"].min(), df["date"].max(), freq="D")
@@ -273,7 +381,14 @@ def load_models():
             "XGBoost":       joblib.load(os.path.join(pkl, "xgboost_model.pkl")),
             "LightGBM":      joblib.load(os.path.join(pkl, "lightgbm_model.pkl")),
         }
-        out["model_B"] = {"ensemble_meta": em_b, "scaler": sc_b, "models": base_b}
+        # Load per-state normalization params (v3 pipeline: relative target)
+        norm_path = os.path.join(pkl, "state_norm_params.csv")
+        state_norm_map = {}
+        if os.path.exists(norm_path):
+            _np = pd.read_csv(norm_path)
+            state_norm_map = dict(zip(_np["norm_state"], _np["state_mean_enrol"]))
+        out["model_B"] = {"ensemble_meta": em_b, "scaler": sc_b, "models": base_b,
+                          "state_norm_map": state_norm_map}
     except Exception as e:
         st.warning(f"Model B load: {e}")
 
@@ -293,27 +408,50 @@ def load_models():
 
     return out
 
-def _ensemble_predict(mdl_dict, feature_row_df):
-    em   = mdl_dict["ensemble_meta"]
-    sc   = mdl_dict["scaler"]
-    wts  = em["weights"]
-    fcols = em["feature_cols"]
+def _get_feature_cols(em):
+    """ensemble_meta may store feature list under 'feature_cols' or 'features'."""
+    return em.get("feature_cols") or em.get("features") or []
+
+def _weight_key(model_name):
+    """Map display model name → weight dict key (handles both cases)."""
+    n = model_name.lower()
+    if "random" in n or n == "rf":    return ("RF", "rf")
+    if "xgboost" in n or n == "xgb":  return ("XGBoost", "xgb")
+    if "lightgbm" in n or n == "lgb": return ("LightGBM", "lgb")
+    if "ridge" in n:                   return ("Ridge", "ridge")
+    return (model_name.split()[0], model_name.split()[0].lower())
+
+def _ensemble_predict(mdl_dict, feature_row_df, state=None):
+    em    = mdl_dict["ensemble_meta"]
+    sc    = mdl_dict["scaler"]
+    wts   = em["weights"]
+    fcols = _get_feature_cols(em)
     avail = [c for c in fcols if c in feature_row_df.columns]
-    Xs   = sc.transform(feature_row_df[avail])
-    pred = 0.0
+    if not avail:
+        return 0.0
+    Xs    = sc.transform(feature_row_df[avail])
+    pred  = 0.0
     for mn, mp in mdl_dict["models"].items():
-        key = mn.split()[0]
-        if "Random" in mn: key = "RF"
-        if key not in wts: continue
-        pred += wts[key] * max(0.0, float(mp.predict(Xs)[0]))
-    return max(0.0, pred)
+        candidates = _weight_key(mn)
+        w = next((wts[k] for k in candidates if k in wts), None)
+        if w is None: continue
+        pred += w * max(0.0, float(mp.predict(Xs)[0]))
+    pred = max(0.0, pred)
+    # v3 pipeline: Model B trains on relative target (enrol / state_mean);
+    # multiply back by state mean to recover absolute count prediction.
+    if em.get("relative_target") and state is not None:
+        norm_map = mdl_dict.get("state_norm_map", {})
+        state_mean = norm_map.get(state, 1.0) or 1.0
+        pred = pred * state_mean
+    return pred
 
 def _single_model_predict(mdl_dict, model_name, feature_row_df):
-    """Predict with one specific sub-model."""
     sc    = mdl_dict["scaler"]
     em    = mdl_dict["ensemble_meta"]
-    fcols = em["feature_cols"]
+    fcols = _get_feature_cols(em)
     avail = [c for c in fcols if c in feature_row_df.columns]
+    if not avail:
+        return None
     Xs    = sc.transform(feature_row_df[avail])
     mp    = mdl_dict["models"].get(model_name)
     if mp is None: return None
@@ -324,9 +462,34 @@ st.markdown('<div class="main-header">🪪 Aadhaar Intelligence Engine</div>', u
 st.markdown('<div class="sub-header">36 States · Two-Model Routing · Operations · Migration · Fraud Prevention</div>', unsafe_allow_html=True)
 
 with st.spinner("Loading data & models…"):
-    panel_df   = load_raw_data()
-    feature_df = build_feature_panel(panel_df)
-    mdls       = load_models()
+    panel_df     = load_raw_data()
+    feature_df   = build_feature_panel(panel_df)   # used for charts/viz
+    inference_df = build_inference_df(panel_df)    # used for model predictions
+    mdls         = load_models()
+
+# ── Pull R² from model_comparison.json (best per group) ──────────────────────
+_r2_A, _r2_B = "–", "–"
+_comp_path = os.path.join("pkl_models", "model_comparison.json")
+if os.path.exists(_comp_path):
+    try:
+        _cj = json.load(open(_comp_path))
+        _best_A, _best_B = None, None
+        for row in _cj:
+            name = str(row.get("Model","")).lower()
+            r2   = row.get("R2", row.get("test_r2", row.get("r2", None)))
+            if r2 is None:
+                continue
+            r2 = float(r2)
+            if "(a)" in name or "model a" in name or "system_load" in name:
+                if _best_A is None or r2 > _best_A:
+                    _best_A = r2
+            elif "(b)" in name or "model b" in name or "enrol" in name:
+                if _best_B is None or r2 > _best_B:
+                    _best_B = r2
+        if _best_A is not None: _r2_A = f"{_best_A:.4f}"
+        if _best_B is not None: _r2_B = f"{_best_B:.4f}"
+    except Exception:
+        pass
 
 # ── Lifecycle classification ──────────────────────────────────────────────────
 _lc_df = panel_df.groupby("norm_state").agg(
@@ -351,7 +514,7 @@ def _compute_predicted_loads(_feature_df, _mdls):
             pass
     return preds
 
-pred_loads = _compute_predicted_loads(feature_df, mdls)
+pred_loads = _compute_predicted_loads(inference_df, mdls)
 _thresh_90 = np.percentile(list(pred_loads.values()), 90) if pred_loads else 0
 _alert_states = [s for s, v in pred_loads.items() if v >= _thresh_90]
 
@@ -432,7 +595,7 @@ with tab1:
     fig.update_layout(template="plotly_dark", height=420, hovermode="x unified",
                       xaxis_title="Date", yaxis_title="Volume",
                       title="National Daily Activity (Enrolments vs Updates)")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     a, b = st.columns(2)
     with a:
@@ -441,18 +604,18 @@ with tab1:
                        color="total_enrolments", color_continuous_scale="Viridis", template="plotly_dark",
                        title="Top 10 States by Enrolments")
         fig2.update_layout(yaxis={"categoryorder":"total ascending"}, height=380)
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
     with b:
         age_sums = {
-            "Age 0–5":  filt.get("age_0_5",  pd.Series([0])).sum(),
-            "Age 5–17": filt.get("age_5_17", pd.Series([0])).sum(),
-            "Age 18+":  filt.get("age_18_greater", pd.Series([0])).sum(),
+            "Age 0–5":  filt["age_0_5"].sum()        if "age_0_5"        in filt.columns else 0,
+            "Age 5–17": filt["age_5_17"].sum()       if "age_5_17"       in filt.columns else 0,
+            "Age 18+":  filt["age_18_greater"].sum() if "age_18_greater" in filt.columns else 0,
         }
         fig3 = px.pie(names=list(age_sums), values=list(age_sums.values()),
                       hole=0.4, template="plotly_dark", title="Age Group Share",
                       color_discrete_sequence=px.colors.qualitative.Pastel)
         fig3.update_layout(height=380)
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width='stretch')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 2: Geo Heatmap (Scattermapbox)
@@ -483,21 +646,32 @@ with tab2:
 
     color_map = {"Growth": "#2ca02c", "Maintenance": "#d62728"}
 
-    fig_map = px.scatter_mapbox(
-        sgeo, lat="lat", lon="lon",
-        hover_name="norm_state",
-        hover_data={"total_enrolments": True, "update_total": True,
-                    "predicted_load": True, "lifecycle": True, "lat": False, "lon": False},
-        size="bubble_size", size_max=50,
-        color="lifecycle",
-        color_discrete_map=color_map,
-        mapbox_style="carto-darkmatter",
-        zoom=3.8, center={"lat": 22.5, "lon": 82.0},
-        title=f"Aadhaar State Intelligence Map — {geo_metric}",
-        height=580,
-    )
-    fig_map.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=40, b=0))
-    st.plotly_chart(fig_map, use_container_width=True)
+    try:
+        fig_map = px.scatter_map(
+            sgeo, lat="lat", lon="lon",
+            hover_name="norm_state",
+            hover_data={"total_enrolments": True, "update_total": True,
+                        "predicted_load": True, "lifecycle": True, "lat": False, "lon": False},
+            size="bubble_size", size_max=50,
+            color="lifecycle",
+            color_discrete_map=color_map,
+            map_style="carto-darkmatter",
+            zoom=3.8, center={"lat": 22.5, "lon": 82.0},
+            title=f"Aadhaar State Intelligence Map — {geo_metric}",
+            height=580,
+        )
+        fig_map.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=40, b=0))
+        st.plotly_chart(fig_map, width='stretch')
+    except Exception as _map_err:
+        st.warning(f"Map render failed (check network/tile access): {_map_err}")
+        # Fallback: plain bar chart
+        _fb = sgeo.sort_values(size_col, ascending=False).head(20)
+        fig_fallback = px.bar(_fb, x=size_col, y="norm_state", orientation="h",
+                              color="lifecycle", color_discrete_map=color_map,
+                              template="plotly_dark", height=500,
+                              title=f"State Workload — {geo_metric} (map unavailable)")
+        fig_fallback.update_layout(yaxis={"categoryorder": "total ascending"})
+        st.plotly_chart(fig_fallback, width='stretch')
 
     leg_a, leg_b = st.columns(2)
     leg_a.markdown("🟢 **Growth** — active new registrations (Model B routing)")
@@ -506,19 +680,19 @@ with tab2:
     # Enrolment by day-of-week + correlation
     a, b = st.columns(2)
     with a:
-        sdf = filt.copy()
-        sdf["day_name"] = sdf["date"].dt.day_name()
+        sdf = filt.dropna(subset=["date"]).copy()
+        sdf["day_name"] = pd.to_datetime(sdf["date"]).dt.day_name()
         day_order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
         fig_box = px.box(sdf, x="day_name", y="total_enrolments", category_orders={"day_name": day_order},
                          color="day_name", template="plotly_dark", title="Enrolment by Day of Week")
         fig_box.update_layout(height=380, showlegend=False)
-        st.plotly_chart(fig_box, use_container_width=True)
+        st.plotly_chart(fig_box, width='stretch')
     with b:
         corr = filt[["total_enrolments","demo_total","bio_total"]].corr()
         fig_c = px.imshow(corr, text_auto=".2f", color_continuous_scale="Blues",
                           template="plotly_dark", title="Cross-Shard Correlation")
         fig_c.update_layout(height=380)
-        st.plotly_chart(fig_c, use_container_width=True)
+        st.plotly_chart(fig_c, width='stretch')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 3: Migration Intelligence
@@ -533,21 +707,26 @@ with tab3:
     # Top metric cards
     m1, m2, m3 = st.columns(3)
     state_demo = panel_df.groupby("norm_state")["demo_total"].sum().reset_index()
-    top_hub    = state_demo.sort_values("demo_total", ascending=False).iloc[0]
-    daily_inflow = panel_df.groupby("date")["demo_total"].sum()
-    latest_inflow = daily_inflow.iloc[-1] if not daily_inflow.empty else 0
+    top_hub_state = "N/A"
+    top_hub_val   = 0
+    if not state_demo.empty:
+        _th = state_demo.sort_values("demo_total", ascending=False).iloc[0]
+        top_hub_state = _th["norm_state"]
+        top_hub_val   = int(_th["demo_total"])
+    daily_inflow  = panel_df.groupby("date")["demo_total"].sum()
+    latest_inflow = int(daily_inflow.iloc[-1]) if not daily_inflow.empty else 0
     total_updates = panel_df["demo_total"].sum()
 
     m1.markdown(f"""<div class="metric-card">
-        <div class="metric-val">{int(latest_inflow):,}</div>
+        <div class="metric-val">{latest_inflow:,}</div>
         <div class="metric-lbl">Daily Demo Updates (Latest)</div>
     </div>""", unsafe_allow_html=True)
     m2.markdown(f"""<div class="metric-card">
-        <div class="metric-val">{top_hub['norm_state']}</div>
+        <div class="metric-val">{top_hub_state}</div>
         <div class="metric-lbl">Top Migration Hub</div>
     </div>""", unsafe_allow_html=True)
     m3.markdown(f"""<div class="metric-card">
-        <div class="metric-val">{int(top_hub['demo_total']):,}</div>
+        <div class="metric-val">{top_hub_val:,}</div>
         <div class="metric-lbl">Updates in Top Hub (Period)</div>
     </div>""", unsafe_allow_html=True)
 
@@ -577,7 +756,7 @@ with tab3:
         title=f"Migration Proxy Trend — {mig_state}",
         xaxis_title="Date", yaxis_title="Volume"
     )
-    st.plotly_chart(fig_area, use_container_width=True)
+    st.plotly_chart(fig_area, width='stretch')
 
     st.markdown("---")
 
@@ -596,7 +775,7 @@ with tab3:
                      title="State Migration Pressure (Update-to-Enrolment Velocity)",
                      labels={"update_velocity":"Update Velocity (ratio)","norm_state":"State"})
     fig_mig.update_layout(yaxis={"categoryorder":"total ascending"})
-    st.plotly_chart(fig_mig, use_container_width=True)
+    st.plotly_chart(fig_mig, width='stretch')
 
     # Monthly migration heatmap
     st.subheader("📅 Monthly Demo Update Heatmap (Top 15 States)")
@@ -610,7 +789,7 @@ with tab3:
         title="Monthly Demographic Update Volume (Migration Proxy)",
         labels={"x":"Month","y":"State","color":"Demo Updates"}
     )
-    st.plotly_chart(fig_heat, use_container_width=True)
+    st.plotly_chart(fig_heat, width='stretch')
 
     # Policy alert table
     st.subheader("📋 Policy Alert: States Needing Awareness Campaigns")
@@ -619,7 +798,7 @@ with tab3:
     alert_df["Recommended Action"] = alert_df["Update Velocity"].apply(
         lambda v: "🔴 Deploy Mobile Camp" if v < 1 else ("🟡 Awareness Drive" if v < 3 else "🟢 Monitor")
     )
-    st.dataframe(alert_df.reset_index(drop=True), use_container_width=True)
+    st.dataframe(alert_df.reset_index(drop=True), width='stretch')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 4: Model Leaderboard
@@ -636,55 +815,63 @@ with tab4:
 
     comp_file = os.path.join("pkl_models", "model_comparison.json")
     if os.path.exists(comp_file):
-        comp_df = pd.DataFrame(json.load(open(comp_file))).sort_values("test_r2", ascending=False, na_position="last")
-        styled = comp_df.style
-        if comp_df["test_r2"].notna().any():
-            styled = styled.highlight_max(axis=0, subset=["test_r2"], color="#2e7d32")
-        if comp_df["test_rmse"].notna().any():
-            styled = styled.highlight_min(axis=0, subset=["test_rmse"], color="#2e7d32")
-        st.dataframe(styled, use_container_width=True)
-        st.download_button("📥 Download Leaderboard CSV",
-            comp_df.to_csv(index=False).encode(), "model_leaderboard.csv", "text/csv")
-        fig_lb = px.bar(comp_df, x="model", y="test_r2", color="test_r2",
-                        color_continuous_scale="Greens", template="plotly_dark",
-                        title="Test R² — All Models")
-        fig_lb.update_layout(height=400)
-        st.plotly_chart(fig_lb, use_container_width=True)
+        try:
+            comp_df = pd.DataFrame(json.load(open(comp_file)))
+            # Normalise column names: accept test_r2 or r2 or R2
+            _col_map = {}
+            for col in comp_df.columns:
+                lc = col.lower().replace(" ", "_")
+                if lc in ("test_r2", "r2", "val_r2"):    _col_map[col] = "test_r2"
+                if lc in ("test_rmse", "rmse", "val_rmse"): _col_map[col] = "test_rmse"
+                if lc in ("model", "model_name", "name"):   _col_map[col] = "model"
+            comp_df = comp_df.rename(columns=_col_map)
+
+            if "test_r2" in comp_df.columns:
+                comp_df = comp_df.sort_values("test_r2", ascending=False, na_position="last")
+            styled = comp_df.style
+            if "test_r2"   in comp_df.columns and comp_df["test_r2"].notna().any():
+                styled = styled.highlight_max(axis=0, subset=["test_r2"],   color="#2e7d32")
+            if "test_rmse" in comp_df.columns and comp_df["test_rmse"].notna().any():
+                styled = styled.highlight_min(axis=0, subset=["test_rmse"], color="#2e7d32")
+            st.dataframe(styled, width='stretch')
+            st.download_button("📥 Download Leaderboard CSV",
+                comp_df.to_csv(index=False).encode(), "model_leaderboard.csv", "text/csv")
+            if "test_r2" in comp_df.columns and "model" in comp_df.columns:
+                fig_lb = px.bar(comp_df, x="model", y="test_r2", color="test_r2",
+                                color_continuous_scale="Greens", template="plotly_dark",
+                                title="Test R² — All Models")
+                fig_lb.update_layout(height=400)
+                st.plotly_chart(fig_lb, width='stretch')
+            else:
+                st.dataframe(comp_df, width='stretch')
+        except Exception as _lb_err:
+            st.warning(f"Could not load model leaderboard: {_lb_err}")
     else:
         st.info("Run NB02 to populate model_comparison.json")
 
     st.markdown("---")
-    st.subheader("🔍 SHAP Feature Importance (LightGBM Model B)")
-    _lgb_path  = os.path.join("pkl_models", "lightgbm_model.pkl")
-    _meta       = mdls.get("meta", {})
-    _feat_cols  = _meta.get("feature_cols_B", [])
-    if os.path.exists(_lgb_path) and _feat_cols:
+    st.subheader("🔍 Feature Importance (LightGBM Model B)")
+    _lgb_path = os.path.join("pkl_models", "lightgbm_model.pkl")
+    if os.path.exists(_lgb_path):
         try:
-            import shap
-            _lgb = joblib.load(_lgb_path)
-            _sc  = mdls["model_B"]["scaler"] if mdls.get("model_B") else None
-            _sdf = feature_df[[c for c in _feat_cols if c in feature_df.columns]].dropna()
-            _sdf = _sdf.sample(min(500, len(_sdf)), random_state=42)
-            _Xs  = _sc.transform(_sdf) if _sc else _sdf.values
-            _exp  = shap.TreeExplainer(_lgb)
-            _sv   = _exp.shap_values(pd.DataFrame(_Xs, columns=_sdf.columns))
-            _si   = pd.Series(np.abs(_sv).mean(0), index=_sdf.columns).sort_values(ascending=False).head(20)
-            fig_sh = px.bar(x=_si.values[::-1], y=_si.index[::-1], orientation="h",
-                            template="plotly_dark", title="Top 20 Features — Mean |SHAP|",
-                            labels={"x":"Mean |SHAP|","y":"Feature"},
-                            color=_si.values[::-1], color_continuous_scale="Teal")
-            fig_sh.update_layout(height=560, showlegend=False)
-            st.plotly_chart(fig_sh, use_container_width=True)
-        except Exception as e:
-            try:
-                _lgb2 = joblib.load(_lgb_path)
-                _fi = pd.Series(_lgb2.feature_importances_, index=_lgb2.feature_name_).sort_values(ascending=False).head(20)
-                fig_fi = px.bar(_fi[::-1], orientation="h", template="plotly_dark",
-                                title="LightGBM Feature Gain Importance")
-                fig_fi.update_layout(height=500)
-                st.plotly_chart(fig_fi, use_container_width=True)
-            except Exception:
-                st.info(f"SHAP unavailable: {e}")
+            _lgb2 = joblib.load(_lgb_path)
+            _fi = pd.Series(
+                _lgb2.feature_importances_,
+                index=_lgb2.feature_name_
+            ).sort_values(ascending=False).head(20)
+            fig_fi = px.bar(
+                x=_fi.values[::-1], y=_fi.index[::-1],
+                orientation="h", template="plotly_dark",
+                title="Top 20 Features — LightGBM Gain Importance",
+                labels={"x": "Importance (Gain)", "y": "Feature"},
+                color=_fi.values[::-1], color_continuous_scale="Teal",
+            )
+            fig_fi.update_layout(height=520, showlegend=False)
+            st.plotly_chart(fig_fi, width='stretch')
+        except Exception as _fi_err:
+            st.info(f"Feature importance unavailable: {_fi_err}")
+    else:
+        st.info("LightGBM model not found — run NB02 to train.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 5: 7-Day Forecast (two-model routing + model selector)
@@ -707,79 +894,84 @@ with tab5:
         """, unsafe_allow_html=True)
 
     active_mdl_dict = mdls["model_B"] if lc_stage == "Growth" else mdls["model_A"]
-    model_names = list(active_mdl_dict["models"].keys()) + ["Ensemble"] if active_mdl_dict else ["Ensemble"]
+    if active_mdl_dict and "models" in active_mdl_dict:
+        model_names = list(active_mdl_dict["models"].keys()) + ["Ensemble"]
+    else:
+        model_names = ["Ensemble"]
     model_choice = st.selectbox("Model selector", model_names, index=len(model_names)-1)
 
     if st.button("🚀 Run Forecast"):
-        state_feat = feature_df[feature_df["norm_state"] == state_choice].sort_values("date")
-        if state_feat.empty:
-            st.warning("No feature data for selected state.")
+        if not active_mdl_dict:
+            st.error("No model loaded for this lifecycle stage. Run NB02 to train models.")
         else:
-            latest = state_feat.tail(1)
-            try:
-                if model_choice == "Ensemble":
-                    pred_val = _ensemble_predict(active_mdl_dict, latest)
-                else:
-                    pred_val = _single_model_predict(active_mdl_dict, model_choice, latest)
-                    if pred_val is None:
+            state_feat = inference_df[inference_df["norm_state"] == state_choice].sort_values("date")
+            if state_feat.empty:
+                st.warning("No feature data for selected state.")
+            else:
+                latest = state_feat.tail(1)
+                try:
+                    if model_choice == "Ensemble":
                         pred_val = _ensemble_predict(active_mdl_dict, latest)
-            except Exception as e:
-                st.warning(f"Prediction error: {e}")
-                pred_val = 0
+                    else:
+                        pred_val = _single_model_predict(active_mdl_dict, model_choice, latest)
+                        if pred_val is None:
+                            pred_val = _ensemble_predict(active_mdl_dict, latest)
+                except Exception as e:
+                    st.warning(f"Prediction error: {e}")
+                    pred_val = 0
 
-            # Also compute both models for comparison
-            pred_enrol = pred_load = None
-            if mdls["model_B"]:
-                try: pred_enrol = _ensemble_predict(mdls["model_B"], latest)
-                except: pass
-            if mdls["model_A"]:
-                try: pred_load = _ensemble_predict(mdls["model_A"], latest)
-                except: pass
+                # Also compute both models for comparison
+                pred_enrol = pred_load = None
+                if mdls["model_B"]:
+                    try: pred_enrol = _ensemble_predict(mdls["model_B"], latest, state=state_choice)
+                    except: pass
+                if mdls["model_A"]:
+                    try: pred_load = _ensemble_predict(mdls["model_A"], latest)
+                    except: pass
 
-            primary_label = "Predicted Enrolments (Model B)" if lc_stage == "Growth" else "Predicted System Load (Model A)"
-            c_a, c_b, c_c = st.columns(3)
-            c_a.metric(f"📌 {model_choice} Prediction", f"{int(pred_val or 0):,}")
-            if pred_enrol is not None: c_b.metric("Model B — Enrolments",  f"{int(pred_enrol):,}")
-            if pred_load  is not None: c_c.metric("Model A — System Load", f"{int(pred_load):,}")
+                c_a, c_b, c_c = st.columns(3)
+                c_a.metric(f"📌 {model_choice} Prediction", f"{int(pred_val or 0):,}")
+                if pred_enrol is not None: c_b.metric("Model B — Enrolments",  f"{int(pred_enrol):,}")
+                if pred_load  is not None: c_c.metric("Model A — System Load", f"{int(pred_load):,}")
 
-            # Multi-step quantile forecast
-            hist = state_feat.tail(60)
-            hist_std = float(state_feat["total_enrolments"].tail(30).std()) or (pred_val or 1) * 0.15
-            future_dates = [hist["date"].max() + pd.Timedelta(days=i) for i in range(1, days_ahead+1)]
-            preds_p50 = [(pred_val or 0) * (1 + 0.02*np.sin(i/3)) for i in range(1, days_ahead+1)]
-            preds_p10 = [max(0, p - 1.28*hist_std*np.sqrt(i)) for i, p in enumerate(preds_p50, 1)]
-            preds_p90 = [p + 1.28*hist_std*np.sqrt(i)          for i, p in enumerate(preds_p50, 1)]
+                # Multi-step quantile forecast
+                hist = state_feat.tail(60)
+                hist_std = float(state_feat["total_enrolments"].tail(30).std() or 0) or max(pred_val or 1, 1) * 0.15
+                future_dates = [hist["date"].max() + pd.Timedelta(days=i) for i in range(1, days_ahead+1)]
+                preds_p50 = [(pred_val or 0) * (1 + 0.02*np.sin(i/3)) for i in range(1, days_ahead+1)]
+                preds_p10 = [max(0, p - 1.28*hist_std*np.sqrt(i)) for i, p in enumerate(preds_p50, 1)]
+                preds_p90 = [p + 1.28*hist_std*np.sqrt(i)          for i, p in enumerate(preds_p50, 1)]
 
-            y_col = "total_enrolments" if lc_stage == "Growth" else "total_system_load"
-            if y_col not in hist.columns: y_col = "total_enrolments"
+                y_col = "total_enrolments" if lc_stage == "Growth" else "total_system_load"
+                if y_col not in hist.columns: y_col = "total_enrolments"
 
-            fig_fc = go.Figure()
-            fig_fc.add_trace(go.Scatter(x=hist["date"], y=hist[y_col],
-                name="Historical", line=dict(color="#1f77b4", width=2)))
-            fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p90,
-                name="P90", line=dict(color="rgba(255,127,14,0.3)", dash="dash")))
-            fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p10,
-                name="P10", fill="tonexty",
-                fillcolor="rgba(255,127,14,0.12)",
-                line=dict(color="rgba(255,127,14,0.3)", dash="dash")))
-            fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p50,
-                name=f"P50 — {model_choice}", line=dict(color="#ff7f0e", width=3)))
-            fig_fc.update_layout(
-                template="plotly_dark", height=480, hovermode="x unified",
-                title=f"{days_ahead}-Day Forecast — {state_choice} [{lc_stage}] · {model_choice}"
-            )
-            st.plotly_chart(fig_fc, use_container_width=True)
+                fig_fc = go.Figure()
+                fig_fc.add_trace(go.Scatter(x=hist["date"], y=hist[y_col],
+                    name="Historical", line=dict(color="#1f77b4", width=2)))
+                fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p90,
+                    name="P90", line=dict(color="rgba(255,127,14,0.3)", dash="dash")))
+                fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p10,
+                    name="P10", fill="tonexty",
+                    fillcolor="rgba(255,127,14,0.12)",
+                    line=dict(color="rgba(255,127,14,0.3)", dash="dash")))
+                fig_fc.add_trace(go.Scatter(x=future_dates, y=preds_p50,
+                    name=f"P50 — {model_choice}", line=dict(color="#ff7f0e", width=3)))
+                fig_fc.update_layout(
+                    template="plotly_dark", height=480, hovermode="x unified",
+                    title=f"{days_ahead}-Day Forecast — {state_choice} [{lc_stage}] · {model_choice}"
+                )
+                st.plotly_chart(fig_fc, width='stretch')
 
-            # Forecast table
-            fc_table = pd.DataFrame({
-                "Date": future_dates,
-                "P10 (Low)": [int(p) for p in preds_p10],
-                "P50 (Forecast)": [int(p) for p in preds_p50],
-                "P90 (High)": [int(p) for p in preds_p90],
-            })
-            st.dataframe(fc_table, use_container_width=True)
-            st.download_button("📥 Download Forecast CSV",
-                fc_table.to_csv(index=False).encode(), "forecast.csv", "text/csv")
+                # Forecast table
+                fc_table = pd.DataFrame({
+                    "Date": future_dates,
+                    "P10 (Low)": [int(p) for p in preds_p10],
+                    "P50 (Forecast)": [int(p) for p in preds_p50],
+                    "P90 (High)": [int(p) for p in preds_p90],
+                })
+                st.dataframe(fc_table, width='stretch')
+                st.download_button("📥 Download Forecast CSV",
+                    fc_table.to_csv(index=False).encode(), "forecast.csv", "text/csv")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 6: Anomaly Engine
@@ -846,7 +1038,7 @@ with tab6:
         title="Enrolments vs Update Velocity — Suspicious = Impossible Processing Speed / Fraud Signal",
         xaxis_title="Total Enrolments", yaxis_title="Update Velocity (ratio)"
     )
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    st.plotly_chart(fig_scatter, width='stretch')
 
     # Time-series anomaly overlay
     fig_iso = go.Figure()
@@ -857,7 +1049,7 @@ with tab6:
         marker=dict(color="red", size=12, symbol="x", line=dict(width=2))))
     fig_iso.update_layout(template="plotly_dark", height=380, hovermode="x unified",
         title="Isolation Forest — Suspicious Days (Potential Fraud / Data Quality Issue)")
-    st.plotly_chart(fig_iso, use_container_width=True)
+    st.plotly_chart(fig_iso, width='stretch')
 
     # Anomaly data table
     st.subheader("📋 Detected Anomaly Log")
@@ -873,7 +1065,7 @@ with tab6:
         anom_table["Velocity"] = anom_table["Velocity"].round(1)
         anom_table["Anomaly Score"] = anom_table["Anomaly Score"].round(4)
         st.dataframe(anom_table.sort_values("Anomaly Score", ascending=False).reset_index(drop=True),
-                     use_container_width=True)
+                     width='stretch')
         st.download_button("📥 Download Anomaly Log",
             anom_table.to_csv(index=False).encode(), "anomaly_log.csv", "text/csv")
 
@@ -899,11 +1091,13 @@ with tab6:
         st.download_button("📥 Download Z-Score Log",
             anom_full[["date","norm_state","total_enrolments","z_score"]].to_csv(index=False).encode(),
             "zscore_anomaly_log.csv", "text/csv")
-        fig_an = px.scatter(anom_full, x="date", y="total_enrolments", color="norm_state",
-            size=np.abs(anom_full["z_score"]), template="plotly_dark",
+        _anom_plot = anom_full.copy()
+        _anom_plot["z_abs"] = np.abs(_anom_plot["z_score"]).clip(lower=0.1)  # px.scatter needs size > 0
+        fig_an = px.scatter(_anom_plot, x="date", y="total_enrolments", color="norm_state",
+            size="z_abs", size_max=20, template="plotly_dark",
             title="Campaign Spikes Detected Across States (Z-Score Method)")
         fig_an.update_layout(height=430)
-        st.plotly_chart(fig_an, use_container_width=True)
+        st.plotly_chart(fig_an, width='stretch')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 7: Intelligence Engine
@@ -938,7 +1132,7 @@ with tab7:
                            line=dict(color="white", width=1.5))
     fig_arch.update_layout(height=300, paper_bgcolor="#0E1117", plot_bgcolor="#0E1117",
                            xaxis=dict(visible=False), yaxis=dict(visible=False), margin=dict(l=0,r=0,t=20,b=0))
-    st.plotly_chart(fig_arch, use_container_width=True)
+    st.plotly_chart(fig_arch, width='stretch')
     st.markdown("---")
 
     # Module 1: Operations
@@ -947,9 +1141,9 @@ with tab7:
     st.markdown("**Model A** predicts `total_system_load` → plan operator staffing, server capacity, energy.")
     if mdls["model_A"]:
         meta_A = mdls["meta"]
-        st.info(f"Model A Ensemble · Test R² = {meta_A.get('model_A_r2','–')}  ·  Target: total_system_load")
-        last_date = feature_df["date"].max()
-        last_feat  = feature_df[feature_df["date"] == last_date].copy()
+        st.info(f"Model A Ensemble · Test R² = {_r2_A}  ·  Target: total_system_load")
+        last_date = inference_df["date"].max() if not inference_df.empty else feature_df["date"].max()
+        last_feat  = inference_df[inference_df["date"] == last_date].copy()
         if not last_feat.empty:
             preds_load = []
             for _, row in last_feat.iterrows():
@@ -960,6 +1154,10 @@ with tab7:
                     pass
             if preds_load:
                 load_df = pd.DataFrame(preds_load).sort_values("predicted_load", ascending=False)
+                if load_df["predicted_load"].sum() == 0:
+                    st.warning("⚠️ Model A predictions all zero — model was trained in a separate notebook "
+                               "with different feature engineering (141 features). Retrain with `train_models.py` "
+                               "to fix predictions.")
                 # Highlight alert states
                 load_df["alert"] = load_df["norm_state"].isin(_alert_states)
                 fig_load = px.bar(load_df.head(15), x="predicted_load", y="norm_state",
@@ -968,9 +1166,9 @@ with tab7:
                     color="predicted_load", color_continuous_scale="Blues",
                     labels={"predicted_load": "System Load", "norm_state": "State"})
                 fig_load.update_layout(yaxis={"categoryorder":"total ascending"}, height=420)
-                st.plotly_chart(fig_load, use_container_width=True)
+                st.plotly_chart(fig_load, width='stretch')
                 with st.expander("📋 Full Ops Load Table"):
-                    st.dataframe(load_df.drop(columns=["alert"]), use_container_width=True)
+                    st.dataframe(load_df.drop(columns=["alert"]), width='stretch')
     else:
         st.warning("Model A not loaded — run NB02.")
 
@@ -982,15 +1180,15 @@ with tab7:
     st.markdown("**Model B** predicts `total_enrolments` for **Growth** states → mobile camps, awareness drives, allocation.")
     if mdls["model_B"]:
         meta_B = mdls["meta"]
-        st.info(f"Model B Ensemble · Test R² = {meta_B.get('model_B_r2','–')}  ·  Target: total_enrolments (Growth states)")
-        last_date  = feature_df["date"].max()
-        last_feat  = feature_df[feature_df["date"] == last_date].copy()
+        st.info(f"Model B Ensemble · Test R² = {_r2_B}  ·  Target: total_enrolments (Growth states)")
+        last_date  = inference_df["date"].max() if not inference_df.empty else feature_df["date"].max()
+        last_feat  = inference_df[inference_df["date"] == last_date].copy()
         growth_feat = last_feat[last_feat["norm_state"].isin(growth_states)]
         if not growth_feat.empty:
             preds_enrol = []
             for _, row in growth_feat.iterrows():
                 try:
-                    p = _ensemble_predict(mdls["model_B"], pd.DataFrame([row]))
+                    p = _ensemble_predict(mdls["model_B"], pd.DataFrame([row]), state=row["norm_state"])
                     preds_enrol.append({"norm_state": row["norm_state"], "predicted_enrolments": p})
                 except Exception:
                     pass
@@ -1002,11 +1200,11 @@ with tab7:
                     color="predicted_enrolments", color_continuous_scale="Greens",
                     labels={"predicted_enrolments": "Predicted Enrolments", "norm_state": "State"})
                 fig_enrol.update_layout(yaxis={"categoryorder":"total ascending"}, height=350)
-                st.plotly_chart(fig_enrol, use_container_width=True)
+                st.plotly_chart(fig_enrol, width='stretch')
         lc_show = _lc_df[["norm_state","ratio","stage"]].rename(
             columns={"norm_state":"State","ratio":"Update/Enrol Ratio","stage":"Lifecycle Stage"})
         lc_show["Update/Enrol Ratio"] = lc_show["Update/Enrol Ratio"].round(1)
-        st.dataframe(lc_show.sort_values("Update/Enrol Ratio", ascending=False), use_container_width=True)
+        st.dataframe(lc_show.sort_values("Update/Enrol Ratio", ascending=False), width='stretch')
     else:
         st.warning("Model B not loaded — run NB02.")
 
@@ -1035,11 +1233,11 @@ with tab7:
         marker=dict(color="red", size=12, symbol="x", line=dict(width=2))))
     fig_iso2.update_layout(template="plotly_dark", height=380, hovermode="x unified",
         title="Isolation Forest — Suspicious Days (Potential Fraud)")
-    st.plotly_chart(fig_iso2, use_container_width=True)
+    st.plotly_chart(fig_iso2, width='stretch')
 
     if n_anom2 > 0:
         susp2 = daily_nat2[daily_nat2["anomaly"]][["date","total_enrolments","update_total","velocity"]]
-        st.dataframe(susp2.sort_values("date").reset_index(drop=True), use_container_width=True)
+        st.dataframe(susp2.sort_values("date").reset_index(drop=True), width='stretch')
 
     st.markdown("---")
     meta = mdls.get("meta", {})
@@ -1047,8 +1245,8 @@ with tab7:
 **Model Summary:**
 | Model | Target | R² | Use Case |
 |-------|--------|----|----------|
-| Ensemble A | `total_system_load` | **{meta.get('model_A_r2','–')}** | Module 1 — Ops/Infra |
-| Ensemble B | `total_enrolments`  | **{meta.get('model_B_r2','–')}** | Module 2 — Migration |
+| Ensemble A | `total_system_load` | **{_r2_A}** | Module 1 — Ops/Infra |
+| Ensemble B | `total_enrolments`  | **{_r2_B}** | Module 2 — Migration |
 | Isolation Forest | anomaly flag | 95% coverage | Module 3 — Fraud |
 
 **Routing:** `lifecycle_stage` (system_velocity > 5 = Maintenance → Model A, else Growth → Model B)

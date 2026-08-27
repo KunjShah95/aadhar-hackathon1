@@ -722,41 +722,156 @@ def main():
     # =========================================================================
     # STEP 5: TRAIN MODEL SUITE B (GROWTH REGIME — ENROLMENTS)
     # =========================================================================
-    print("\n[Step 5/7] Training Model Suite B (Target: total_enrolments for Growth States)...")
-    preds_b = {}
-    _, rmse_ridge_b = fit_eval("Ridge (B)", Ridge(alpha=10.0), X_tr_s_b, y_tr_enrol, X_te_s_b, y_te_enrol, "ridge_baseline_model.pkl", log_target=True, results=results, test_preds=preds_b, target_name="total_enrolments")
-    _, rmse_rf_b    = fit_eval("RF (B)", RandomForestRegressor(n_estimators=500, max_depth=10, min_samples_leaf=10, min_samples_split=5, max_features=0.5, random_state=42, n_jobs=-1), X_tr, y_tr_enrol, X_te, y_te_enrol, "random_forest_model.pkl", log_target=True, results=results, test_preds=preds_b, target_name="total_enrolments")
-    _, rmse_xgb_b   = fit_eval("XGBoost (B)", xgb.XGBRegressor(n_estimators=600, learning_rate=0.03, max_depth=6, subsample=0.8, colsample_bytree=0.7, min_child_weight=5, reg_alpha=0.5, reg_lambda=2.0, random_state=42, n_jobs=-1, verbosity=0), X_tr, y_tr_enrol, X_te, y_te_enrol, "xgboost_model.pkl", log_target=True, results=results, test_preds=preds_b, target_name="total_enrolments")
-    _, rmse_lgb_b   = fit_eval("LGB (B)", lgb.LGBMRegressor(n_estimators=600, learning_rate=0.03, num_leaves=63, min_child_samples=10, subsample=0.8, colsample_bytree=0.7, reg_alpha=0.5, reg_lambda=2.0, random_state=42, verbose=-1), X_tr, y_tr_enrol, X_te, y_te_enrol, "lightgbm_model.pkl", log_target=True, results=results, test_preds=preds_b, target_name="total_enrolments")
+    # Senior-dev fixes applied:
+    #   1. Per-state relative target (enrol / state_mean) — eliminates inter-state
+    #      scale variance (UP=1M+/day vs Sikkim=<1000/day); model learns relative
+    #      deviations; app multiplies prediction × state_mean to recover counts.
+    #   2. Load-feature purge — load_lag_*/load_rolling_*/load_std_* are Model A
+    #      targets; keeping them leaks signal and confuses Model B.
+    #   3. Feature selection via quick-LGB importance — 79 features on ~800 rows
+    #      is overfit territory (~10 rows/feature); keep top 30.
+    #   4. 7-day smoothed target — reduces bursty noise; model learns trend/rhythm.
+    #   5. Stronger regularization — smaller trees, higher min_child, less overfit.
+    # =========================================================================
+    print("\n[Step 5/7] Training Model Suite B (Target: total_enrolments — improved pipeline)...")
 
-    # Blended Inverse-RMSE Ensemble B
-    inv_b = {"Ridge": 1.0 / max(rmse_ridge_b, 1), "RF": 1.0 / max(rmse_rf_b, 1), "XGBoost": 1.0 / max(rmse_xgb_b, 1), "LightGBM": 1.0 / max(rmse_lgb_b, 1)}
+    # --- Fix 1: per-state relative target & 7-day smoothed target ---------------
+    # Relative target: ratio to state mean (all states on same scale, still > 0)
+    state_mean_map = train_df.groupby("norm_state")["total_enrolments"].mean().to_dict()
+    global_mean    = train_df["total_enrolments"].mean()
+
+    def _rel_target(df):
+        sm = df["norm_state"].map(state_mean_map).fillna(global_mean).clip(lower=1)
+        return df["total_enrolments"] / sm
+
+    y_tr_enrol_rel = _rel_target(train_df).values
+    y_te_enrol_rel = _rel_target(test_df).values
+
+    # 7-day smoothed target (per-state rolling avg, shift=1 to avoid leakage)
+    def _smooth_target(df):
+        parts = []
+        for state, g in df.groupby("norm_state", sort=False):
+            g = g.sort_values("date").copy()
+            sm = state_mean_map.get(state, global_mean) or 1
+            smooth = g["total_enrolments"].shift(1).rolling(7, min_periods=1).mean().bfill().fillna(0)
+            parts.append(smooth / sm)
+        return pd.concat(parts).loc[df.index].values
+
+    y_tr_smooth = _smooth_target(train_df)
+    y_te_smooth = _smooth_target(test_df)
+
+    # Save normalization params so app can inverse-transform predictions
+    norm_params = pd.DataFrame([
+        {"norm_state": s, "state_mean_enrol": v}
+        for s, v in state_mean_map.items()
+    ])
+    norm_params.to_csv("pkl_models/state_norm_params.csv", index=False)
+
+    # --- Fix 2: purge load-target features from Model B -------------------------
+    _load_prefixes = ("load_lag_", "load_rolling_", "load_std_")
+    feature_cols_b_full = [c for c in feature_cols
+                           if not any(c.startswith(p) for p in _load_prefixes)]
+
+    # --- Fix 3: feature selection — quick LGB, keep top 30 ---------------------
+    _selector = lgb.LGBMRegressor(n_estimators=200, learning_rate=0.05,
+                                   num_leaves=31, random_state=42, verbose=-1)
+    _selector.fit(X_tr[feature_cols_b_full], np.log1p(np.maximum(0, y_tr_enrol_rel)))
+    _importance = pd.Series(_selector.feature_importances_, index=feature_cols_b_full)
+    TOP_K = 30
+    feature_cols_b = _importance.nlargest(TOP_K).index.tolist()
+    print(f"  Model B feature selection: {len(feature_cols_b_full)} → top {TOP_K} features")
+
+    X_tr_b = train_df[feature_cols_b]
+    X_te_b = test_df[feature_cols_b]
+
+    # Scaler fitted on selected features
+    sc_b2 = StandardScaler()
+    X_tr_b_s = pd.DataFrame(sc_b2.fit_transform(X_tr_b), columns=feature_cols_b)
+    X_te_b_s = pd.DataFrame(sc_b2.transform(X_te_b),    columns=feature_cols_b)
+    joblib.dump(sc_b2, "pkl_models/ridge_scaler.pkl")  # overwrite with new scaler
+
+    # --- Fix 4+5: train with relative target + strong regularisation ------------
+    preds_b_rel = {}
+    _, rmse_ridge_b = fit_eval(
+        "Ridge (B)", Ridge(alpha=50.0),
+        X_tr_b_s, pd.Series(y_tr_enrol_rel),
+        X_te_b_s, pd.Series(y_te_enrol_rel),
+        "ridge_baseline_model.pkl",
+        log_target=True, results=results, test_preds=preds_b_rel,
+        target_name="total_enrolments")
+
+    _, rmse_rf_b = fit_eval(
+        "RF (B)",
+        RandomForestRegressor(n_estimators=400, max_depth=7, min_samples_leaf=15,
+                               min_samples_split=10, max_features="sqrt",
+                               random_state=42, n_jobs=-1),
+        X_tr_b, pd.Series(y_tr_smooth),
+        X_te_b, pd.Series(y_te_enrol_rel),
+        "random_forest_model.pkl",
+        log_target=True, results=results, test_preds=preds_b_rel,
+        target_name="total_enrolments")
+
+    _, rmse_xgb_b = fit_eval(
+        "XGBoost (B)",
+        xgb.XGBRegressor(n_estimators=500, learning_rate=0.03, max_depth=4,
+                          subsample=0.8, colsample_bytree=0.7, min_child_weight=10,
+                          reg_alpha=1.0, reg_lambda=5.0,
+                          random_state=42, n_jobs=-1, verbosity=0),
+        X_tr_b, pd.Series(y_tr_smooth),
+        X_te_b, pd.Series(y_te_enrol_rel),
+        "xgboost_model.pkl",
+        log_target=True, results=results, test_preds=preds_b_rel,
+        target_name="total_enrolments")
+
+    _, rmse_lgb_b = fit_eval(
+        "LGB (B)",
+        lgb.LGBMRegressor(n_estimators=500, learning_rate=0.03, num_leaves=31,
+                           max_depth=4, min_child_samples=20,
+                           subsample=0.8, colsample_bytree=0.7,
+                           reg_alpha=1.0, reg_lambda=5.0,
+                           random_state=42, verbose=-1),
+        X_tr_b, pd.Series(y_tr_smooth),
+        X_te_b, pd.Series(y_te_enrol_rel),
+        "lightgbm_model.pkl",
+        log_target=True, results=results, test_preds=preds_b_rel,
+        target_name="total_enrolments")
+
+    # Blended Inverse-RMSE Ensemble B (relative-scale predictions)
+    inv_b = {
+        "Ridge":    1.0 / max(rmse_ridge_b, 1e-6),
+        "RF":       1.0 / max(rmse_rf_b, 1e-6),
+        "XGBoost":  1.0 / max(rmse_xgb_b, 1e-6),
+        "LightGBM": 1.0 / max(rmse_lgb_b, 1e-6),
+    }
     tot_b = sum(inv_b.values())
     w_b = {k: v / tot_b for k, v in inv_b.items()}
 
-    blend_pred_b = (
-        w_b["Ridge"]    * preds_b["Ridge (B)"] +
-        w_b["RF"]       * preds_b["RF (B)"] +
-        w_b["XGBoost"]  * preds_b["XGBoost (B)"] +
-        w_b["LightGBM"] * preds_b["LGB (B)"]
+    blend_pred_b_rel = (
+        w_b["Ridge"]    * preds_b_rel["Ridge (B)"] +
+        w_b["RF"]       * preds_b_rel["RF (B)"] +
+        w_b["XGBoost"]  * preds_b_rel["XGBoost (B)"] +
+        w_b["LightGBM"] * preds_b_rel["LGB (B)"]
     )
-    stack_r2_b   = r2_score(y_te_enrol, blend_pred_b)
-    stack_rmse_b = float(np.sqrt(mean_squared_error(y_te_enrol, blend_pred_b)))
-    stack_mae_b  = float(mean_absolute_error(y_te_enrol, blend_pred_b))
-    print(f"  {'Ensemble B (Enrolments)':32s}  train_R2=N/A        test_R2={stack_r2_b:.4f}  RMSE={stack_rmse_b:,.0f}")
 
-    inv_b = {"Ridge": 1.0 / rmse_ridge_b, "RF": 1.0 / rmse_rf_b, "XGBoost": 1.0 / rmse_xgb_b, "LightGBM": 1.0 / rmse_lgb_b}
-    tot_b = sum(inv_b.values())
-    w_b = {k: v / tot_b for k, v in inv_b.items()}
+    # Inverse-transform: relative → absolute counts for metrics
+    te_state_means = test_df["norm_state"].map(state_mean_map).fillna(global_mean).clip(lower=1).values
+    blend_pred_b_abs = blend_pred_b_rel * te_state_means
+
+    stack_r2_b   = r2_score(y_te_enrol, blend_pred_b_abs)
+    stack_rmse_b = float(np.sqrt(mean_squared_error(y_te_enrol, blend_pred_b_abs)))
+    stack_mae_b  = float(mean_absolute_error(y_te_enrol, blend_pred_b_abs))
+    print(f"  {'Ensemble B (Enrolments)':32s}  train_R2=N/A        test_R2={stack_r2_b:.4f}  RMSE={stack_rmse_b:,.0f}")
 
     joblib.dump({
         "meta_model": None,
         "meta_scaler": None,
         "scaler": "ridge_scaler.pkl",
         "weights": w_b,
-        "feature_cols": feature_cols,
+        "feature_cols": feature_cols_b,
         "target": "total_enrolments",
-        "pipeline_version": "v2"
+        "relative_target": True,           # flag: predictions are ratios, multiply by state_mean
+        "state_norm_params": "state_norm_params.csv",
+        "pipeline_version": "v3"
     }, "pkl_models/ensemble_meta.pkl")
 
     results.append({
@@ -774,14 +889,16 @@ def main():
 
     with open("pkl_models/feature_metadata.json", "w") as f:
         json.dump({
-            "feature_cols": feature_cols,
+            "feature_cols": feature_cols,        # Model A uses all 79
+            "feature_cols_b": feature_cols_b,    # Model B uses top-30 selected
             "log_target": True,
+            "relative_target_b": True,
             "raw_target_models": [],
             "log_target_models": ["Ridge", "Random Forest", "XGBoost", "LightGBM", "Ensemble"],
             "modelA_weights": w_a,
             "modelB_weights": w_b,
             "split_date": str(pd.Timestamp(split_date).date()),
-            "pipeline_version": "v2"
+            "pipeline_version": "v3"
         }, f, indent=2)
 
     # =========================================================================

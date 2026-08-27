@@ -1,7 +1,7 @@
-# Aadhaar Analytics Dashboard
+# Aadhaar Intelligence Engine
 
-**ML-powered analytics platform for Aadhaar enrollment & update trends across India.**  
-Analyzes ~5M records spanning enrollment, demographic, and biometric data — with interactive dashboards, multi-model predictions, quantile forecasting, anomaly detection, and MLOps drift monitoring.
+**Dual-model ML platform for Aadhaar enrollment & system-load analytics across India's 36 states and UTs.**  
+Turns raw UIDAI datasets into actionable intelligence — capacity planning, policy alerts, anomaly detection, and MLOps drift monitoring.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue?style=flat-square)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B?style=flat-square)](https://streamlit.io)
@@ -9,222 +9,256 @@ Analyzes ~5M records spanning enrollment, demographic, and biometric data — wi
 [![XGBoost](https://img.shields.io/badge/XGBoost-1.7-orange?style=flat-square)](https://xgboost.readthedocs.io)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0-EE4C2C?style=flat-square)](https://pytorch.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square)](https://docker.com)
-[![GCP Cloud Run](https://img.shields.io/badge/GCP-Cloud%20Run-4285F4?style=flat-square)](https://cloud.google.com/run)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
 ---
 
 ## Overview
 
-Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge of uncovering societal trends in Aadhaar enrollment and update data. The system turns raw government datasets into actionable intelligence — from capacity planning to anomaly response.
+Built for the **UIDAI Aadhaar Hackathon**, this project addresses the challenge of uncovering societal trends in Aadhaar enrollment and update data. The system routes predictions through two purpose-built model suites depending on the operational context.
 
 **Demo:** [YouTube walkthrough](https://youtu.be/293kr7-k5S4?si=VvmeDya12exBM5JB)
 
 ---
 
-## Application Modules (5 Tabs)
+## Two-Model Architecture
 
-### 1. Executive Dashboard
-- KPI cards: total enrollments, unique states, daily average, data span
-- Daily enrollment time-series with rolling 30-day average
-- Top 10 states by enrollment (horizontal bar chart)
+India's Aadhaar ecosystem has two distinct regimes requiring separate models:
+
+| | Model Suite A | Model Suite B |
+|---|---|---|
+| **Regime** | Maintenance (80%+ saturation) | Growth (new enrolments) |
+| **Target** | `total_system_load` | `total_enrolments` |
+| **States** | All 36 | Growth-focused states |
+| **Ensemble R²** | **0.747** | **0.371** |
+| **Use case** | Capacity planning, staffing | Policy alerts, mobile camps |
+
+### Why two models?
+- **Model A**: Biometric/demographic updates dominate traffic. Highly predictable with lag/rolling features.
+- **Model B**: Raw enrolments are bursty and state-scale-variant (UP: 1M+/day vs Sikkim: <1000/day). Model B trains on per-state relative values (`enrolments / state_mean`) then inverse-transforms predictions — eliminates scale variance as the dominant noise source.
+
+---
+
+## Application (7 Tabs)
+
+### Tab 1 · Executive Dashboard
+- KPI cards: total enrolments, unique states, daily average, data span
+- Daily enrolment time-series with rolling 30-day average
+- Top 10 states by enrolment (bar chart)
 - Age group demographics pie chart
 - CSV export of filtered data
 
-### 2. Geospatial & EDA
-- India state-level GIS density map (Plotly `scatter_geo`)
+### Tab 2 · Geospatial & EDA
+- India state-level density map (Plotly `scatter_geo`)
 - Day-of-week seasonality box plots
-- Cross-shard feature correlation heatmap
+- Cross-feature correlation heatmap
 
-### 3. ML Model Leaderboard & MLOps Drift
-- Model benchmark leaderboard table (R², RMSE, MAE)
-- Test R² comparison bar chart across all 5 trained models
-- Kolmogorov-Smirnov (KS) test + Population Stability Index (PSI) feature drift monitoring
-- CSV leaderboard exporter
+### Tab 3 · Demographic Deep Dive
+- Per-state age-group breakdowns
+- Biometric vs. demographic update ratios
+- Population-normalized enrolment rates
 
-### 4. Live Forecast Predictor with Quantile Bounds
-- Real-time inference engine for 1–30 day forecasting horizon
-- P10 lower bound, P50 median prediction, P90 upper bound with shaded confidence intervals
-- Configurable state and feature inputs
+### Tab 4 · ML Model Leaderboard & MLOps Drift
+- Model benchmark table (R², RMSE, MAE) for all trained models
+- KS-test + Population Stability Index (PSI) feature drift monitoring
+- CSV leaderboard export
 
-### 5. Anomaly Alert Engine
-- Z-score spike detector across enrollment time-series
-- Interactive webhook alert payload simulator (Slack / Email)
-- CSV anomaly log exporter
+### Tab 5 · Live Forecast Predictor
+- Real-time inference — 1–30 day horizon
+- P10 / P50 / P90 quantile bounds with shaded confidence intervals
+- State selector + lifecycle stage routing (Model A vs B)
 
----
+### Tab 6 · Anomaly Alert Engine
+- Z-score spike detection across enrolment time-series
+- IsolationForest ensemble anomaly scoring
+- Webhook alert payload simulator (Slack / Email)
+- CSV anomaly log export
 
-## Machine Learning & Deep Learning Benchmark Results
-
-Models are evaluated using an **80/20 chronological time-series split** (training on historical dates and validating on unseen future dates).
-
-### Model Suite A: Operational System Load (`total_system_load`)
-> **Primary Use Case:** Forecasting Aadhaar center traffic, biometric scanner throughput, and operator counter staffing for saturated/maintenance states (where updates account for >85% of traffic).
-
-| Model Architecture | Train $R^2$ | Train RMSE | Train MAE | Test $R^2$ | Test RMSE | Test MAE | Primary Operational Role |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|---|
-| **Ensemble A** *(Meta-Blend)* 🥇 | — | — | — | **0.7422** | **13,108** | **6,453** | **Primary Ops Routing** (Center Staffing & Servers) |
-| **LightGBM (A)** 🥈 | **0.9541** | 30,111 | 9,842 | **0.7333** | 13,334 | 6,481 | High-speed gradient boosting on rolling/lag features |
-| **Random Forest (A)** 🥉 | **0.8498** | 54,436 | 14,210 | **0.7152** | 13,778 | 6,956 | Bagged decision tree ensemble |
-| **XGBoost (A)** | **0.9476** | 32,163 | 10,120 | **0.7071** | 13,973 | 6,601 | Regularized gradient boosted decision trees |
-| **Ridge Baseline (A)** | -3.1426 | 285,927 | 78,340 | **0.0113** | 25,672 | 13,762 | Linear baseline for total workload |
+### Tab 7 · Policy Intelligence (Two-Module)
+- **Module 1 – Operations**: Model A predicts system load per state; flags 90th-percentile overload states
+- **Module 2 – Migration**: Model B predicts enrolment levels for growth states; drives mobile camp and awareness campaign allocation
 
 ---
 
-### Model Suite B & Deep Learning: New Enrolments (`total_enrolments`)
-> **Primary Use Case:** Forecasting new registrations and child enrolment backlogs for growth states (UP, Bihar, Assam, Meghalaya).
+## Benchmark Results
 
-| Model Architecture | Train $R^2$ | Train RMSE | Train MAE | Test $R^2$ | Test RMSE | Test MAE | Primary Operational Role |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|---|
-| **PyTorch LSTM + Attention** 🧠 | **0.1134** | 2,120 | 854 | **0.1649** | **1,939** | **912** | **Deep Sequence**: 14-day sliding context window |
-| **Ensemble B (Enrolments)** | — | — | — | **-0.0737** | 2,505 | 892 | Inverse-RMSE blended tree predictor |
-| **LightGBM (B)** | **0.9704** | 850 | 290 | -0.1405 | 2,582 | 908 | Tree baseline for new registrations |
-| **Random Forest (B)** | **0.4820** | 3,557 | 1,120 | -0.1405 | 2,582 | 908 | Balanced depth tree ensemble |
-| **XGBoost (B)** | **0.9724** | 822 | 275 | -0.1406 | 2,582 | 908 | Tree baseline with L2 shrinkage |
+**80/20 chronological time-series split** (train on past, evaluate on unseen future dates).
 
-> **Key Feature Engineering**: 79 temporal, holiday decay, lag, rolling statistical, population quintile, and system velocity features. Target variables are `log1p`-transformed to stabilize variance across states of vastly different populations. All trained weights and scalers are persisted in [`pkl_models/`](pkl_models/).
+| Model | Target | Test R² | Test RMSE |
+|---|---|---|---|
+| **Ensemble A** | total_system_load | **0.747** | 12,982 |
+| LightGBM (A) | total_system_load | 0.738 | 13,206 |
+| XGBoost (A) | total_system_load | 0.724 | 13,570 |
+| Random Forest (A) | total_system_load | 0.709 | 13,923 |
+| **Ensemble B** | total_enrolments | **0.371** | 1,917 |
+| LightGBM (B) | total_enrolments | 0.225 | — |
+| XGBoost (B) | total_enrolments | 0.216 | — |
+| Random Forest (B) | total_enrolments | 0.151 | — |
+| LSTM (PyTorch) | total_enrolments | −0.372 | 3,501 |
+
+> Model B individual scores are on the relative (ratio) scale. Ensemble B RMSE is after inverse-transforming back to absolute counts.
 
 ---
 
-## Quickstart
+## Feature Engineering (79 features, shared pipeline)
 
-### Local Execution
+Each state's daily record is enriched with:
+
+| Group | Features |
+|---|---|
+| Calendar | day_of_week, day_of_month, month, quarter, day_of_year, is_weekend |
+| Cyclical | sin/cos DOW, sin/cos month |
+| Population | log_state_pop, state_pop_tier, state_cat |
+| Holidays | is_holiday, days_to_holiday, days_since_holiday, holiday_proximity, holiday_recency |
+| Lags | lag_1/3/7/14/30 (enrolments + bio + demo) |
+| Rolling stats | rolling_mean/std 3/7/14/30 (enrolments + load + bio + demo) |
+| Velocity | ewm_7, ewm_trend, mom_growth, system_velocity, rolling_cv_7 |
+| Ratios | bio_to_enrol_ratio, demo_to_enrol_ratio, per-1000 variants |
+| State stats | state_mean_enrol, state_std_enrol, state_median_enrol |
+
+**Model B additionally:**
+- Purges `load_lag_*` / `load_rolling_*` (Model A target leakage)
+- Selects top 30 features by LightGBM importance (prevents overfit on sparse data)
+- Trains on 7-day smoothed relative target
+
+---
+
+## Quick Start
+
 ```bash
-git clone https://github.com/KunjShah95/aadhar-hackathon1.git
-cd aadhar-hackathon1
+# Clone
+git clone https://github.com/KunjShah95/aadhar-hackathon.git
+cd aadhar-hackathon
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Train models (full pipeline incl. LSTM)
+python train_models.py
+
+# Train without LSTM (fast mode)
+python train_models.py --skip-lstm
+
+# Launch dashboard
 streamlit run app.py
 ```
-Open [http://localhost:8501](http://localhost:8501) in your browser.
 
-### Docker
+---
+
+## Model Training
+
 ```bash
-docker build -t aadhaar-analytics .
-docker run -p 8080:8080 aadhaar-analytics
+# Full pipeline: tabular ensembles + PyTorch LSTM
+python train_models.py
+
+# Fast mode: skip LSTM
+python train_models.py --skip-lstm
+
+# Custom LSTM settings
+python train_models.py --epochs 50 --lookback 21
 ```
-Open [http://localhost:8080](http://localhost:8080) in your browser.
+
+Artifacts saved to `pkl_models/`:
+
+| File | Contents |
+|---|---|
+| `modelA_ensemble_meta.pkl` | Model A weights, feature list, scaler ref |
+| `ensemble_meta.pkl` | Model B weights, top-30 feature list, relative_target flag |
+| `state_norm_params.csv` | Per-state mean enrolment for inverse-transform |
+| `state_stats.csv` | Per-state mean/std/median for feature engineering |
+| `feature_metadata.json` | Full feature list, pipeline version, split date |
+| `model_comparison.json` | Benchmark results for all models |
+| `lstm_model.pt` | PyTorch LSTM checkpoint |
+
+---
+
+## MLOps — Drift Monitoring
+
+```bash
+python mlops_pipeline.py
+```
+
+Calculates:
+- **Kolmogorov-Smirnov (KS) Test** — distribution shift per feature
+- **Population Stability Index (PSI)** — PSI > 0.25 triggers retraining alert
+
+Results saved to `pkl_models/mlops_drift_report.json` and visualized in Tab 4.
 
 ---
 
 ## Project Structure
 
 ```
-aadhar-hackathon1/
-│
-├── app.py                               # Streamlit Web App (Interactive intelligence dashboard)
-├── train_models.py                      # Unified ML & Deep Learning (Ridge, RF, XGB, LGBM, Stacking, LSTM)
-├── mlops_pipeline.py                    # Automated KS + PSI drift monitoring & model health audit
-│
-├── pkl_models/                          # Pre-trained model artifacts & metrics
-│   ├── best_model.pkl                   # LightGBM best model
-│   ├── lightgbm_model.pkl
-│   ├── xgboost_model.pkl
-│   ├── random_forest_model.pkl
-│   ├── ridge_baseline_model.pkl
-│   ├── ensemble_meta.pkl                # Stacking ensemble meta-learner
-│   ├── lstm_model.pt                    # PyTorch LSTM weights
-│   ├── lstm_scaler.pkl                  # Fitted LSTM feature scaler
-│   ├── lstm_feature_cols.json           # Sequence feature definitions
-│   ├── feature_metadata.json            # Feature names & engineering config
-│   ├── model_comparison.json            # Benchmark metrics
-│   └── mlops_drift_report.json          # KS + PSI drift audit results
-│
-├── api_data_aadhar_enrolment/           # Enrollment CSV shards (~1M rows)
-├── api_data_aadhar_demographic/         # Demographic CSV shards (~2M rows)
-├── api_data_aadhar_biometric/           # Biometric CSV shards (~1.8M rows)
-│
-├── cleaned_aadhaar_data.csv             # Unified panel dataset
-├── cleaned_aadhaar_monthly_national.csv # Monthly national aggregations
-├── cleaned_aadhaar_summary_by_state.csv # State-level total enrollments
-│
-├── Dockerfile                           # Production container (PORT 8080)
-├── requirements.txt                     # Python dependencies
-├── deploy_to_gcp.bat                    # One-click GCP Cloud Run deploy (Windows)
-├── deploy_to_gcp.sh                     # One-click GCP Cloud Run deploy (Linux/macOS)
-└── PROJECT_REPORT.md                    # Technical deep-dive & architecture
+.
+├── app.py                    # Streamlit dashboard (7 tabs)
+├── train_models.py           # Full dual-model training pipeline (v3)
+├── mlops_pipeline.py         # KS + PSI drift monitoring
+├── requirements.txt
+├── Dockerfile
+├── pkl_models/
+│   ├── modelA_*.pkl          # Model Suite A (system load)
+│   ├── ensemble_meta.pkl     # Model Suite B ensemble
+│   ├── state_norm_params.csv # Per-state enrolment normalization
+│   ├── state_stats.csv       # Per-state feature stats
+│   ├── feature_metadata.json
+│   ├── model_comparison.json
+│   └── lstm_model.pt
+└── api_data_aadhar_enrolment/
+    └── **/*.csv              # Raw UIDAI CSV shards
 ```
 
 ---
 
-## Cloud Deployment
+## Deployment
 
-### Google Cloud Run
+### Docker
 
-**Prerequisites**: Enable billing at [console.cloud.google.com/billing](https://console.cloud.google.com/billing) (offers **$300 free credits**).
-
-**Option A — One-Click Script (Windows):**
-```cmd
-deploy_to_gcp.bat
+```bash
+docker build -t aadhaar-engine .
+docker run -p 8501:8501 aadhaar-engine
 ```
 
-**Option B — Manual gcloud command:**
+### GCP Cloud Run
+
 ```bash
-gcloud run deploy aadhaar-analytics-app \
-  --source . \
+gcloud builds submit --tag gcr.io/PROJECT_ID/aadhaar-engine
+gcloud run deploy aadhaar-engine \
+  --image gcr.io/PROJECT_ID/aadhaar-engine \
   --region asia-south1 \
   --platform managed \
   --allow-unauthenticated \
   --port 8080
 ```
 
-**Always Free Cloud Run Tier** (after free trial):
-- 2 Million Requests / month
-- 360,000 GB-seconds memory / month
-- 180,000 vCPU-seconds / month
-
-### Other Free Cloud Options
+### Free Hosting Options
 
 | Platform | Free Tier | Notes |
 |---|---|---|
 | **Streamlit Community Cloud** | 1 GB RAM, unlimited apps | Easiest — 1-click GitHub deploy |
-| **Hugging Face Spaces** | **16 GB RAM CPU** | Best for PyTorch LSTM models |
+| **Hugging Face Spaces** | 16 GB RAM CPU | Best for PyTorch LSTM |
 | **Oracle Cloud (OCI)** | 4 vCPUs + 24 GB RAM forever | Most generous always-free tier |
 | **Render** | 512 MB, sleeps on inactivity | Uses existing Dockerfile |
 
 ---
 
-## MLOps — Drift Monitoring
-
-Run the automated drift audit script after collecting new inference data:
-
-```bash
-python mlops_pipeline.py
-```
-
-This calculates:
-- **Kolmogorov-Smirnov (KS) Test** — detects distribution shift per feature
-- **Population Stability Index (PSI)** — flags features with PSI > 0.2 for retraining alerts
-
-Results are saved to `pkl_models/mlops_drift_report.json` and visualized in the **ML Leaderboard & MLOps Drift** tab of the Streamlit app.
-
----
-
-## Model Training & Automation
-
-The entire data engineering, feature generation, model training, and artifact export pipeline is consolidated into [`train_models.py`](train_models.py):
-
-```bash
-# Run full training pipeline (Tabular models + Stacking Ensemble + PyTorch LSTM)
-python train_models.py
-
-# Run tabular models only (fast mode)
-python train_models.py --skip-lstm
-```
-
-To run the automated MLOps drift audit and model health check:
-```bash
-python mlops_pipeline.py
-```
-
----
-
 ## Key Insights
 
-- **Top states** (UP, Bihar, Maharashtra) account for a disproportionate share of enrollments; CV across states is 42%.
-- **Age 18+** makes up 55% of enrollments; child enrollment (0–17) is an underserved segment.
+- **Top 3 states** (UP, Bihar, Maharashtra) account for a disproportionate share of enrolments; CV across states is ~42%.
+- **Age 18+** makes up ~55% of enrolments; child enrollment (0–17) is an underserved segment.
 - **Mid-week peaks** (Tue–Thu) with ~20% dip on weekends — actionable for staffing.
 - **Biometric updates** lag demographic updates (38% vs 62%) — a target for awareness campaigns.
-- **847 anomalies** detected (5.2% of data), 22% high-severity — indicating localized campaign spikes or data issues.
+- Anomaly detection flags localized campaign spikes and data quality issues automatically.
+
+---
+
+## Troubleshooting
+
+| Error | Cause | Fix |
+|---|---|---|
+| `ValueError: X has N features, expecting M` | Stale pkl vs new feature pipeline | Re-run `python train_models.py` |
+| `KeyError: norm_state` | Raw CSV missing `state` column | Check CSV shard format |
+| Predictions all zero | Old notebook-trained pkl loaded | Re-run `python train_models.py` |
+| `MemoryError` | Dataset too large | Process CSVs in batches |
 
 ---
 
@@ -233,22 +267,11 @@ python mlops_pipeline.py
 | Layer | Technology |
 |---|---|
 | **Data & ML** | Python 3.11, Pandas, NumPy, Scikit-learn, XGBoost, LightGBM |
-| **Deep Learning** | PyTorch 2.0 (LSTM Time-Series) |
+| **Deep Learning** | PyTorch 2.0 (LSTM + Attention) |
 | **Dashboard** | Streamlit 1.28+, Plotly |
-| **MLOps** | KS-test, PSI drift monitoring (`mlops_pipeline.py`) |
-| **Containerization** | Docker (Python 3.11-slim, PORT 8080) |
+| **MLOps** | KS-test, PSI drift monitoring |
+| **Containerization** | Docker (Python 3.11-slim) |
 | **Cloud** | GCP Cloud Run (`asia-south1`) |
-
----
-
-## Troubleshooting
-
-| Error | Cause | Fix |
-|---|---|---|
-| `FileNotFoundError: best_model.pkl` | `pkl_models/` not cloned | Pull latest Git (`pkl_models/` is now tracked) |
-| `ValueError: X has N features, expecting M` | Feature mismatch | Check `pkl_models/feature_metadata.json` |
-| `MemoryError` | Dataset too large | Process CSVs in batches; close other apps |
-| GCP billing error | Billing not enabled | Enable at [console.developers.google.com/billing](https://console.developers.google.com/billing/enable?project=vortex-arena-ai-92843) |
 
 ---
 

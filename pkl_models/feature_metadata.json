@@ -80,7 +80,40 @@
     "state_std_enrol",
     "state_median_enrol"
   ],
+  "feature_cols_b": [
+    "state_std_enrol",
+    "day_of_month",
+    "bio_lag_30",
+    "day_of_year",
+    "days_since_holiday",
+    "days_to_holiday",
+    "ewm_7",
+    "day_of_week",
+    "demo_rolling_30",
+    "state_cat",
+    "lag_1_per_1000",
+    "ewm_trend",
+    "log_state_pop",
+    "demo_lag_30",
+    "rolling_cv_7",
+    "rolling_mean_7_per_1000",
+    "bio_rolling_30",
+    "cos_month",
+    "rolling_mean_30",
+    "lag_3",
+    "lag_7_per_1000",
+    "mom_growth",
+    "demo_to_enrol_ratio",
+    "bio_to_enrol_ratio",
+    "lag_diff_1_7",
+    "state_mean_enrol",
+    "demo_lag_3",
+    "rolling_std_3",
+    "demo_lag_1",
+    "lag_diff_7_14"
+  ],
   "log_target": true,
+  "relative_target_b": true,
   "raw_target_models": [],
   "log_target_models": [
     "Ridge",
@@ -90,17 +123,17 @@
     "Ensemble"
   ],
   "modelA_weights": {
-    "Ridge": 0.1509279041378192,
-    "RF": 0.28120763013717953,
-    "XGBoost": 0.2772886582612543,
-    "LGB": 0.2905758074637469
+    "Ridge": 0.14913973830231986,
+    "RF": 0.27622095959522286,
+    "XGBoost": 0.2834151862258984,
+    "LGB": 0.291224115876559
   },
   "modelB_weights": {
-    "Ridge": 0.21211159294838638,
-    "RF": 0.26263087622469183,
-    "XGBoost": 0.2626262869099941,
-    "LightGBM": 0.2626312439169277
+    "Ridge": 0.2146022333345061,
+    "RF": 0.25444170643732844,
+    "XGBoost": 0.2647199512816927,
+    "LightGBM": 0.2662361089464727
   },
   "split_date": "2025-12-07",
-  "pipeline_version": "v2"
+  "pipeline_version": "v3"
 }

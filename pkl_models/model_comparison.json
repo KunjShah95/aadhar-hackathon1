@@ -1,44 +1,130 @@
 [
   {
-    "Model": "Meta-Ensemble Blend (A)",
-    "R2": 0.4992,
-    "RMSE": 5898.95,
-    "MAE": 3096.86
+    "model": "Ridge (A)",
+    "target": "total_system_load",
+    "train_r2": -3.3866,
+    "train_rmse": 294228.89,
+    "train_mae": 26828.89,
+    "test_r2": 0.0024,
+    "test_rmse": 25786.72,
+    "test_mae": 13785.46,
+    "test_mape": null,
+    "training_seconds": 0.01,
+    "model_path": "modelA_ridge.pkl"
   },
   {
-    "Model": "XGBoost (A)",
-    "R2": 0.4897,
-    "RMSE": 5954.76,
-    "MAE": 3171.5
+    "model": "RF (A)",
+    "target": "total_system_load",
+    "train_r2": 0.8517,
+    "train_rmse": 54098.17,
+    "train_mae": 7468.49,
+    "test_r2": 0.7092,
+    "test_rmse": 13923.0,
+    "test_mae": 7007.26,
+    "test_mape": null,
+    "training_seconds": 1.44,
+    "model_path": "modelA_rf.pkl"
   },
   {
-    "Model": "Random Forest (A)",
-    "R2": 0.4855,
-    "RMSE": 5979.33,
-    "MAE": 3084.21
+    "model": "XGBoost (A)",
+    "target": "total_system_load",
+    "train_r2": 0.9482,
+    "train_rmse": 31962.41,
+    "train_mae": 5290.84,
+    "test_r2": 0.7238,
+    "test_rmse": 13569.58,
+    "test_mae": 6477.54,
+    "test_mape": null,
+    "training_seconds": 1.29,
+    "model_path": "modelA_xgb.pkl"
   },
   {
-    "Model": "LightGBM (A)",
-    "R2": 0.4703,
-    "RMSE": 6067.15,
-    "MAE": 3180.31
+    "model": "LGB (A)",
+    "target": "total_system_load",
+    "train_r2": 0.9549,
+    "train_rmse": 29838.17,
+    "train_mae": 4361.54,
+    "test_r2": 0.7384,
+    "test_rmse": 13205.72,
+    "test_mae": 6425.3,
+    "test_mape": null,
+    "training_seconds": 3.51,
+    "model_path": "modelA_lgb.pkl"
   },
   {
-    "Model": "Ridge Baseline (A)",
-    "R2": -498.2279,
-    "RMSE": 186253.03,
-    "MAE": 16522.27
+    "model": "Ensemble A (system_load)",
+    "target": "total_system_load",
+    "train_r2": null,
+    "test_r2": 0.7472,
+    "train_rmse": null,
+    "test_rmse": 12981.54,
+    "test_mae": 6394.85,
+    "test_mape": null,
+    "training_seconds": null,
+    "model_path": "modelA_ensemble_meta.pkl"
   },
   {
-    "Model": "PyTorch LSTM + Attention (B)",
-    "R2": -0.1678,
-    "RMSE": 3001.2,
-    "MAE": 1271.79
+    "model": "Ridge (B)",
+    "target": "total_enrolments",
+    "train_r2": 0.1881,
+    "train_rmse": 1.47,
+    "train_mae": 0.61,
+    "test_r2": -0.1929,
+    "test_rmse": 1.02,
+    "test_mae": 0.67,
+    "test_mape": null,
+    "training_seconds": 0.0,
+    "model_path": "ridge_baseline_model.pkl"
   },
   {
-    "Model": "LightGBM Baseline (B)",
-    "R2": -0.2023,
-    "RMSE": 3017.29,
-    "MAE": 1239.73
+    "model": "RF (B)",
+    "target": "total_enrolments",
+    "train_r2": 0.5542,
+    "train_rmse": 0.65,
+    "train_mae": 0.29,
+    "test_r2": 0.1514,
+    "test_rmse": 0.86,
+    "test_mae": 0.47,
+    "test_mape": null,
+    "training_seconds": 0.45,
+    "model_path": "random_forest_model.pkl"
+  },
+  {
+    "model": "XGBoost (B)",
+    "target": "total_enrolments",
+    "train_r2": 0.9116,
+    "train_rmse": 0.29,
+    "train_mae": 0.12,
+    "test_r2": 0.216,
+    "test_rmse": 0.82,
+    "test_mae": 0.44,
+    "test_mape": null,
+    "training_seconds": 0.49,
+    "model_path": "xgboost_model.pkl"
+  },
+  {
+    "model": "LGB (B)",
+    "target": "total_enrolments",
+    "train_r2": 0.8954,
+    "train_rmse": 0.31,
+    "train_mae": 0.13,
+    "test_r2": 0.2249,
+    "test_rmse": 0.82,
+    "test_mae": 0.44,
+    "test_mape": null,
+    "training_seconds": 0.19,
+    "model_path": "lightgbm_model.pkl"
+  },
+  {
+    "model": "Ensemble B (enrolments)",
+    "target": "total_enrolments",
+    "train_r2": null,
+    "test_r2": 0.3713,
+    "train_rmse": null,
+    "test_rmse": 1917.01,
+    "test_mae": 654.54,
+    "test_mape": null,
+    "training_seconds": null,
+    "model_path": "ensemble_meta.pkl"
   }
 ]
